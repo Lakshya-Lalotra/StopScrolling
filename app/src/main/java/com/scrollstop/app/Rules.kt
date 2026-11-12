@@ -3,8 +3,11 @@ package com.scrollstop.app
 import android.graphics.Rect
 import android.view.accessibility.AccessibilityNodeInfo
 
-/** Something to cover with an overlay, e.g. the Reels tab button or the Explore grid. */
-data class Hide(val rect: Rect, val text: String? = null)
+/**
+ * Something to cover with an overlay, e.g. the Reels tab button or the Explore grid.
+ * [color] is the cover's colour (null = default for light/dark mode, transparent while it's being measured).
+ */
+data class Hide(val rect: Rect, val text: String? = null, val color: Int? = null)
 
 /** What ScrollStop found on the current screen of a supported app. */
 data class Analysis(

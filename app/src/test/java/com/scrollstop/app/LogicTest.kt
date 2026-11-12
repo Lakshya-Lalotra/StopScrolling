@@ -185,3 +185,26 @@ class LockAndLimitsTest {
         assertEquals(Platform.YOUTUBE, Platform.byKey("yt"))
     }
 }
+
+class ColorsTest {
+    @Test fun borderPointsStayInsideTheBox() {
+        val pts = Colors.borderPoints(100, 200, 300, 300, inset = 4, perEdge = 8)
+        assertEquals(32, pts.size)
+        assertTrue(pts.all { (x, y) -> x in 104..295 && y in 204..295 })
+        assertTrue(pts.any { it.first == 104 } && pts.any { it.first == 295 })
+        assertTrue(Colors.borderPoints(0, 0, 6, 6, inset = 4, perEdge = 8).isEmpty())
+    }
+
+    @Test fun dominantColourWinsOverIconPixels() {
+        val bar = 0xFF1C1C1F.toInt()
+        val icon = 0xFFFFFFFF.toInt()
+        val px = IntArray(30) { if (it % 5 == 0) icon else bar }
+        assertEquals(bar, Colors.dominant(px))
+        assertNull(Colors.dominant(IntArray(4) { 0x00000000 }))
+    }
+
+    @Test fun darkness() {
+        assertTrue(Colors.isDark(0xFF101010.toInt()))
+        assertFalse(Colors.isDark(0xFFF5F5F5.toInt()))
+    }
+}

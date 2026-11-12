@@ -261,3 +261,42 @@ object Fmt {
         return String.format(Locale.US, "%d:%02d %s", h12, m, if (h < 12) "AM" else "PM")
     }
 }
+
+/** Picks the background colour around a tab button so its cover blends in. */
+object Colors {
+    /** Points just inside the edges of a box: where a tab button shows plain background, not its icon. */
+    fun borderPoints(left: Int, top: Int, right: Int, bottom: Int, inset: Int, perEdge: Int): List<Pair<Int, Int>> {
+        val l = left + inset
+        val t = top + inset
+        val r = right - 1 - inset
+        val b = bottom - 1 - inset
+        if (r <= l || b <= t || perEdge < 2) return emptyList()
+        val out = ArrayList<Pair<Int, Int>>(perEdge * 4)
+        for (i in 0 until perEdge) {
+            val x = l + (r - l) * i / (perEdge - 1)
+            val y = t + (b - t) * i / (perEdge - 1)
+            out += x to t
+            out += x to b
+            out += l to y
+            out += r to y
+        }
+        return out
+    }
+
+    /** The most common opaque colour, or null if there is none. */
+    fun dominant(pixels: IntArray): Int? {
+        val counts = HashMap<Int, Int>()
+        for (p in pixels) {
+            if ((p ushr 24) < 0xF0) continue
+            counts[p] = (counts[p] ?: 0) + 1
+        }
+        return counts.maxByOrNull { it.value }?.key
+    }
+
+    fun isDark(c: Int): Boolean {
+        val r = (c shr 16) and 0xFF
+        val g = (c shr 8) and 0xFF
+        val b = c and 0xFF
+        return 0.299 * r + 0.587 * g + 0.114 * b < 128
+    }
+}

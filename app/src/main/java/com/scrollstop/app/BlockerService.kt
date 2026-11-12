@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
+import android.graphics.Color
 import android.graphics.Rect
 import android.os.Build
 import android.os.Handler
@@ -43,6 +44,7 @@ class BlockerService : AccessibilityService() {
     private lateinit var prefs: Prefs
     private lateinit var stats: Stats
     private lateinit var hides: HideOverlays
+    private lateinit var sampler: ColorSampler
     private lateinit var blockScreen: BlockScreen
     private lateinit var power: PowerManager
     private val h = Handler(Looper.getMainLooper())
@@ -100,6 +102,7 @@ class BlockerService : AccessibilityService() {
         prefs = Prefs.get(this)
         stats = Stats.get(this)
         hides = HideOverlays(this)
+        sampler = ColorSampler(this) { scheduleEval() }
         blockScreen = BlockScreen(this)
         power = getSystemService(PowerManager::class.java)
         appLabel = applicationInfo.loadLabel(packageManager).toString()
@@ -225,7 +228,7 @@ class BlockerService : AccessibilityService() {
             return
         }
         val a = Rules.analyze(platform, pkg, root, prefs, screen)
-        hides.show(pkg, if (blockScreen.isShowing || imeVisible()) emptyList() else a.hides)
+        hides.show(pkg, if (blockScreen.isShowing || imeVisible()) emptyList() else colorize(pkg, a))
         if (a.dmThread) lastDmSeenAt = SystemClock.elapsedRealtime()
 
         a.closeNow?.let { what ->
@@ -234,6 +237,33 @@ class BlockerService : AccessibilityService() {
             return
         }
         if (a.shortVideo) onShortVideo(platform, pkg) else endWatching()
+    }
+
+    /**
+     * Paints each cover in the app's own background colour so a hidden tab looks removed.
+     * Until that colour is known the tab cover is see-through (still blocks taps) for a moment
+     * while one screenshot is taken.
+     */
+    private fun colorize(pkg: String, a: Analysis): List<Hide> {
+        val missing = ArrayList<Rect>()
+        val out = a.hides.map { h ->
+            if (h.text == null) {
+                val c = sampler.tabColor(pkg, h.rect)
+                when {
+                    c != null -> h.copy(color = c)
+                    // Don't measure while the Reels/Shorts tab itself is open: it may be highlighted.
+                    sampler.worthTrying(pkg, h.rect) && !a.shortVideo -> {
+                        missing += h.rect
+                        h.copy(color = Color.TRANSPARENT)
+                    }
+                    else -> h
+                }
+            } else {
+                h.copy(color = sampler.appColor(pkg))
+            }
+        }
+        if (missing.isNotEmpty()) sampler.sample(pkg, missing)
+        return out
     }
 
     private fun onAppChanged(pkg: String) {
