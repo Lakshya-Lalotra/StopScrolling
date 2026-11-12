@@ -8,8 +8,12 @@ The blocker works offline and never sends anything anywhere.
 **Social apps without the feeds, inside ScrollStop** (like SocialLite's focused browser)
 - **Instagram, YouTube, Facebook, X, Reddit and LinkedIn** open inside ScrollStop. The Reels, Explore and Shorts
   buttons are **removed completely**, and the pages behind them can't be opened.
-- Reels, **ads** and **suggested posts** are taken out of the feed. Instagram can show your **Following** feed
-  (people you follow, newest first) or **Favorites** instead of the algorithm's mix, or messages only.
+- Reels, **ads** and **suggested posts** are removed completely from the feed: "Sponsored" and "Paid partnership"
+  posts in any common language, "Suggested for you" posts and rows, posts from accounts you don't follow, and
+  everything after "You're all caught up". Instagram shows your **Following** feed (people you follow, newest
+  first) or **Favorites** instead of the algorithm's mix, or messages only.
+- **Use ScrollStop's Instagram instead of the app**: opening the Instagram app takes you to the clean version
+  (messages open your inbox). The app's own feed can't be edited by any other app, only covered.
 - **Explore / Popular pages blocked**: YouTube Explore, X Explore, Reddit Popular and All.
 - **Links from friends**: share a reel or video link to ScrollStop (or make links open in it) and you can watch
   that one, but not swipe on to the next.
@@ -47,6 +51,24 @@ The blocker works offline and never sends anything anywhere.
 - **Home-screen widget** with today's time and quick buttons.
 - Full-screen reminder when something is blocked (your own message or random nudges), light and dark theme,
   setup checklist, and a notification if Android switches the blocker off.
+
+## Get the APK without a computer (GitHub, works from your phone)
+1. Push this repository to GitHub (it's already set up in `.github/workflows/build.yml`).
+2. Open the **Actions** tab. The "Build APK" job runs on every push (or tap **Run workflow**).
+3. After ~5 minutes, open the finished run → **Artifacts** → download **ScrollStop-apk**, unzip it, install `app-release.apk`.
+
+## Or build it yourself
+Android Studio: open this folder → wait for Gradle sync → **Build → Build APK(s)**.
+Command line (JDK 17+, Android SDK): `./gradlew assembleRelease` → `app/build/outputs/apk/release/app-release.apk`.
+Tests: `./gradlew testDebugUnitTest` (set `SCROLLSTOP_SCREENSHOTS=/some/dir` to also save a PNG of every screen).
+Instagram clean-up script: `node tools/instagram-script-check/check.js app/src/main/res/raw/focus_instagram.js tools/instagram-script-check`
+(needs Node and Playwright; runs the script on a mock feed and lists what was hidden).
+
+### About signing
+Every build is signed with the same key (`app/scrollstop.jks`), so new versions install **over** old ones and keep your
+settings and stats. (Version 1 builds from GitHub Actions were signed with a random key each time, so **uninstall the old
+ScrollStop once** before installing version 2 or later.) If your repository is public and you'd rather use a private key,
+set the `SCROLLSTOP_KEYSTORE`, `SCROLLSTOP_PASSWORD` and `SCROLLSTOP_ALIAS` environment variables (or GitHub secrets).
 
 ## If Play Protect says "App blocked to protect your device"
 In some countries (India included) Google Play Protect blocks any app installed from a browser, chat app or file manager
