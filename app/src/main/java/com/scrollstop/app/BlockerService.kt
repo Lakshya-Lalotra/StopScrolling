@@ -40,6 +40,12 @@ class BlockerService : AccessibilityService() {
         @Volatile var instance: BlockerService? = null
             private set
         val isRunning get() = instance != null
+
+        /** Set from Help → "Something isn't blocked?": save the next social-app screen's layout. */
+        @Volatile private var captureAskedAt = 0L
+        fun requestCapture() {
+            captureAskedAt = SystemClock.elapsedRealtime()
+        }
         private const val SYSTEM_UI = "com.android.systemui"
     }
 
@@ -86,6 +92,7 @@ class BlockerService : AccessibilityService() {
     private val feed = FeedMemory()
     private var lastFeedScrollAt = 0L
     private var lastSkipAt = 0L
+    private var captureSeconds = 0
     private var sleepRemindedDay = ""
     private val warned = HashSet<String>()
     private var lastToast: Toast? = null
@@ -560,6 +567,7 @@ class BlockerService : AccessibilityService() {
         }
         val pkg = fgPkg
         if (pkg != null && isTracked(pkg)) stats.add(Stats.appMs(pkg), dt)
+        maybeCapture(pkg, now)
         watching?.let { if (!dmSession) stats.add(Stats.shortMs(it), dt) }
         // Re-check limits and allowances, and make sure covers never stay on top of another app.
         if ((pkg != null && isInteresting(pkg)) || hides.isShowing) evaluate()
@@ -568,6 +576,39 @@ class BlockerService : AccessibilityService() {
             lastMinuteAt = now
             everyMinute()
         }
+    }
+
+    /** After the user asks for it, saves the layout of a social app screen 3 seconds after it opens. */
+    private fun maybeCapture(pkg: String?, now: Long) {
+        if (captureAskedAt == 0L) return
+        if (now - captureAskedAt > 10 * 60_000L) {
+            captureAskedAt = 0L
+            return
+        }
+        if (pkg == null || Platform.of(pkg) == null) {
+            captureSeconds = 0
+            return
+        }
+        if (++captureSeconds < 3) return
+        captureAskedAt = 0L
+        captureSeconds = 0
+        val root = runCatching { rootInActiveWindow }.getOrNull() ?: return
+        val file = runCatching { LayoutDump.write(this, root, screenRect()) }.getOrNull()
+        if (file == null) {
+            toast("Couldn't save the layout")
+            return
+        }
+        val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.files", file)
+        val send = Intent(Intent.ACTION_SEND)
+            .setType("text/plain")
+            .putExtra(Intent.EXTRA_STREAM, uri)
+            .putExtra(Intent.EXTRA_SUBJECT, "ScrollStop screen layout")
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        send.clipData = android.content.ClipData.newRawUri("layout", uri)
+        val chooser = Intent.createChooser(send, "Share the screen layout")
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        Notifier.layoutSaved(this, chooser)
+        toast("Screen layout saved. Check your notifications to share it.")
     }
 
     /** Bedtime heads-up and widget refresh. */

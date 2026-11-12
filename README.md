@@ -21,8 +21,11 @@ The blocker works offline and never sends anything anywhere.
 - Time inside counts towards each app's stats and daily limit; a top bar shows today's time and what was hidden.
 
 **Inside the real apps** (via the accessibility service)
-- **Instagram**: Reels tab + any reel opened from feed, profile or Explore. Optional: allow single reels friends send
-  in DMs (swiping on is still blocked), hide Explore, block Stories.
+- **Instagram**: Reels tab + any reel opened from feed, profile or Explore. **Suggested posts and ads are blocked in
+  the Instagram app itself**: each one is covered in the feed's own colour (from its header down to the next post),
+  stays covered as you scroll, and ScrollStop scrolls past it for you once you stop on it. Optional: allow single reels
+  friends send in DMs (swiping on is still blocked), hide Explore, block Stories, and a 30-day reminder for
+  Instagram's own "Snooze suggested posts" switch.
 - **YouTube**: Shorts tab + Shorts player (normal videos still work). Optional **search-only mode** that hides Home.
 - **Facebook**: Reels tab + reel player. Optional: block the Video/Watch tab.
 - **Snapchat**: Spotlight.
@@ -88,6 +91,12 @@ either:
 4. Follow the **Finish setup** card: allow running in the background (battery: Unrestricted) and notifications.
    On Xiaomi also enable **Autostart**.
 
+## Something isn't blocked?
+Apps change their screens with updates. In ScrollStop: **Settings → Help → Something isn't blocked? → Capture**, then
+open the app on that screen and wait 3 seconds. ScrollStop saves the screen's layout (element IDs, labels, positions)
+and shows a notification to share the file, so the detection rules in `Rules.kt` can be updated. The file includes
+names and captions that were on screen, so only share it with someone you trust.
+
 ## Privacy
 The blocker reads the screen only to find the feeds it blocks, and keeps nothing. Internet access is used only to load
 the social sites you open inside ScrollStop, and by the optional adult filter to ask Cloudflare's family DNS for
@@ -106,6 +115,8 @@ For the real apps ScrollStop works through Android's accessibility service. That
 |---|---|
 | `BlockerService.kt` | Accessibility service: watches the screen, counts time/videos, blocks, strict-mode protection |
 | `Rules.kt` | Detection rules per app (view IDs and labels) |
+| `FeedFilter.kt` | Which Instagram feed posts are ads or suggested, and where to cover / how far to skip |
+| `LayoutDump.kt` | "Something isn't blocked?" screen-layout capture |
 | `Overlays.kt` | Covers for tab buttons/feeds, and the full-screen block reminder |
 | `Logic.kt` | Plain rules (allowance, schedule, browser URLs, lock, app limits), unit tested |
 | `Prefs.kt` / `Stats.kt` | Settings and daily counters |

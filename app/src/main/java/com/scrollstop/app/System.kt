@@ -101,6 +101,10 @@ object Notifier {
     fun blockerOff(ctx: Context): Boolean =
         post(ctx, ID_OFF, "ScrollStop is switched off", "Reels and Shorts aren't being blocked. Tap to turn it back on.")
 
+    /** "Screen layout saved": tapping it opens the share sheet with the file. */
+    fun layoutSaved(ctx: Context, share: Intent): Boolean =
+        post(ctx, 4, "Screen layout saved", "Tap to share it.", share)
+
     fun resnooze(ctx: Context): Boolean =
         post(ctx, 3, "Instagram's suggested posts are back",
             "Instagram only snoozes them for 30 days. Tap to snooze them again.")
@@ -109,7 +113,7 @@ object Notifier {
         post(ctx, ID_SLEEP, "Sleep mode in $minutes min",
             "Social apps close at bedtime. Wrap up and put the phone down soon.")
 
-    private fun post(ctx: Context, id: Int, title: String, text: String): Boolean {
+    private fun post(ctx: Context, id: Int, title: String, text: String, target: Intent? = null): Boolean {
         if (!ServiceState.notificationsAllowed(ctx)) return false
         val nm = ctx.getSystemService(NotificationManager::class.java)
         if (nm.getNotificationChannel(CHANNEL) == null) {
@@ -120,7 +124,7 @@ object Notifier {
             )
         }
         val open = PendingIntent.getActivity(
-            ctx, id, Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            ctx, id, (target ?: Intent(ctx, MainActivity::class.java)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val n = NotificationCompat.Builder(ctx, CHANNEL)

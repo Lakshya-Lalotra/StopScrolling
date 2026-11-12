@@ -172,6 +172,77 @@ class Ui(private val ctx: Context) {
         return nums
     }
 
+    /** Small grey heading above a group of rows, like "BLOCK" or "DAILY ALLOWANCE". */
+    fun section(parent: LinearLayout, text: String) {
+        text(parent, text.uppercase(), com.google.android.material.R.style.TextAppearance_Material3_LabelMedium, muted = true)
+            .setPadding(dp(4), dp(18), dp(4), dp(6))
+    }
+
+    /** A rounded card that holds rows, with no title. */
+    fun group(parent: LinearLayout): LinearLayout = card(parent).apply { setPadding(dp(16), dp(4), dp(16), dp(4)) }
+
+    /** A round icon: the app's own icon if given, otherwise a coloured circle with a letter. */
+    fun icon(drawable: android.graphics.drawable.Drawable?, letter: String, color: Int, sizeDp: Int = 36): View {
+        if (drawable != null) {
+            return android.widget.ImageView(ctx).apply {
+                setImageDrawable(drawable)
+                layoutParams = LinearLayout.LayoutParams(dp(sizeDp), dp(sizeDp))
+            }
+        }
+        return TextView(ctx).apply {
+            text = letter
+            gravity = Gravity.CENTER
+            setTextColor(android.graphics.Color.WHITE)
+            textSize = sizeDp * 0.42f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            background = android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.OVAL
+                setColor(color)
+            }
+            layoutParams = LinearLayout.LayoutParams(dp(sizeDp), dp(sizeDp))
+        }
+    }
+
+    /** A tappable row: [icon] title ........ value  › */
+    fun navRow(
+        parent: LinearLayout,
+        title: String,
+        value: String?,
+        icon: View? = null,
+        onClick: (() -> Unit)?,
+    ): TextView {
+        val row = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = dp(54)
+            setPadding(0, dp(6), 0, dp(6))
+            if (onClick != null) {
+                isClickable = true
+                val tv = android.util.TypedValue()
+                ctx.theme.resolveAttribute(android.R.attr.selectableItemBackground, tv, true)
+                setBackgroundResource(tv.resourceId)
+                setOnClickListener { onClick() }
+            }
+        }
+        icon?.let {
+            row.addView(it, (it.layoutParams as? LinearLayout.LayoutParams ?: LinearLayout.LayoutParams(dp(36), dp(36)))
+                .apply { marginEnd = dp(14) })
+        }
+        val t = text(null, title, com.google.android.material.R.style.TextAppearance_Material3_BodyLarge)
+        row.addView(t, LinearLayout.LayoutParams(0, WRAP, 1f))
+        val v = text(null, value ?: "", com.google.android.material.R.style.TextAppearance_Material3_BodyMedium, muted = true)
+        v.maxLines = 1
+        v.ellipsize = TextUtils.TruncateAt.END
+        v.maxWidth = dp(170)
+        row.addView(v, LinearLayout.LayoutParams(WRAP, WRAP).apply { marginStart = dp(8) })
+        if (onClick != null) {
+            row.addView(text(null, "›", com.google.android.material.R.style.TextAppearance_Material3_TitleLarge, muted = true),
+                LinearLayout.LayoutParams(WRAP, WRAP).apply { marginStart = dp(8) })
+        }
+        parent.addView(row, LinearLayout.LayoutParams(MATCH, WRAP))
+        return v
+    }
+
     fun divider(parent: LinearLayout) {
         val v = View(ctx)
         v.setBackgroundColor(MaterialColors.getColor(ctx, com.google.android.material.R.attr.colorOutlineVariant, 0))

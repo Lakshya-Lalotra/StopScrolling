@@ -3,7 +3,7 @@
     <string name="service_summary">Blocks Reels, Shorts and Spotlight</string>
     <string name="service_description">ScrollStop looks at the screen of Instagram, YouTube, Facebook, Snapchat, TikTok, web browsers and any app you put a limit on, only to detect when a Reels, Shorts or Spotlight screen opens. It then presses Back, covers the tab button, or shows a reminder. When strict mode is on it also stops ScrollStop from being switched off or uninstalled. To make the cover over a tab button match the app\'s colours it reads a few pixels from one screenshot, which is thrown away right after. Nothing it sees is stored or sent anywhere.</string>
     <string name="nav_home">Home</string>
-    <string name="nav_block">Block</string>
+    <string name="nav_block">Apps</string>
     <string name="nav_stats">Stats</string>
     <string name="nav_settings">Settings</string>
     <string name="widget_description">Today\'s social time, and quick ways into Instagram and YouTube without the feeds</string>

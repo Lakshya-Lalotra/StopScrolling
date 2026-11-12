@@ -5,6 +5,8 @@ import android.app.TimePickerDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.graphics.drawable.Drawable
+import android.net.Uri
+import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -15,7 +17,6 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.ArrayAdapter
 import android.widget.EditText
-import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -29,6 +30,8 @@ import androidx.core.graphics.drawable.IconCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.google.android.material.bottomnavigation.BottomNavigationView
+import com.google.android.material.bottomsheet.BottomSheetBehavior
+import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.chip.Chip
 import com.google.android.material.chip.ChipGroup
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
@@ -37,6 +40,10 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+/**
+ * Four simple tabs, like Sociallite: Home (status and today), Apps (one row per app, tap for its
+ * switches), Stats and Settings. Details live in bottom sheets instead of long pages.
+ */
 class MainActivity : AppCompatActivity() {
 
     private lateinit var prefs: Prefs
@@ -60,6 +67,7 @@ class MainActivity : AppCompatActivity() {
 
     private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { render() }
 
+    private var afterVpn: (() -> Unit)? = null
     private val askVpn = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
         if (r.resultCode == RESULT_OK) {
             prefs.adultFilter = true
@@ -67,7 +75,7 @@ class MainActivity : AppCompatActivity() {
         } else {
             toast("The filter needs the VPN permission to work")
         }
-        handler.postDelayed({ render() }, 600)
+        handler.postDelayed({ afterVpn?.invoke() ?: render() }, 600)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -119,7 +127,7 @@ class MainActivity : AppCompatActivity() {
     /** Things that change which cards are shown; when they change the page is rebuilt. */
     private fun structure(): String = listOf(
         tab, ServiceState.isEnabled(this), BlockerService.isRunning, prefs.isLocked(), prefs.isPaused(),
-        ServiceState.batteryUnrestricted(this), ServiceState.notificationsAllowed(this),
+        prefs.isSleeping(), ServiceState.batteryUnrestricted(this), ServiceState.notificationsAllowed(this),
     ).joinToString()
 
     private fun render() {
@@ -128,7 +136,7 @@ class MainActivity : AppCompatActivity() {
         refreshers.clear()
         lastStructure = structure()
         when (tab) {
-            R.id.nav_block -> buildBlock()
+            R.id.nav_block -> buildApps()
             R.id.nav_stats -> buildStats()
             R.id.nav_settings -> buildSettings()
             else -> buildHome()
@@ -142,123 +150,122 @@ class MainActivity : AppCompatActivity() {
     // =====================================================================
 
     private fun buildHome() {
-        ui.header(page, getString(R.string.app_name), "Block Reels, Shorts & endless scrolling")
-
+        ui.header(page, getString(R.string.app_name), null)
         val enabled = ServiceState.isEnabled(this)
         val running = BlockerService.isRunning
 
         // ---- status ----
         val status = ui.card(page)
-        val tvStatus = ui.title(status, "")
+        val tvStatus = ui.text(status, "", com.google.android.material.R.style.TextAppearance_Material3_TitleLarge)
+        tvStatus.setTypeface(tvStatus.typeface, android.graphics.Typeface.BOLD)
         val tvSub = ui.body(status, "", muted = true)
         when {
-            !enabled -> ui.button(status, "Turn on blocker") { showEnableDialog() }
-            !running -> ui.button(status, "Open Accessibility settings") { open(ServiceState.accessibilitySettings()) }
+            !enabled -> ui.button(status, "Turn on") { showEnableDialog() }.also { setTop(it, 10) }
+            !running -> ui.button(status, "Fix it") { open(ServiceState.accessibilitySettings()) }.also { setTop(it, 10) }
         }
         refreshers += {
             val (t, s) = when {
-                !enabled -> "🔴  Blocker is off" to "Turn it on so ScrollStop can close Reels and Shorts for you."
-                !running -> "🟠  Blocker isn't running" to
-                    "Android stopped it. In Accessibility settings, switch ScrollStop off and on again."
-                prefs.isSleeping() -> "😴  Sleep mode" to
-                    "Social apps are closed until ${Fmt.clock(prefs.sleepEnd)}."
-                prefs.isPaused() -> "⏸  On a break" to
-                    "Blocking comes back in ${Fmt.countdown(prefs.pauseUntil - System.currentTimeMillis())}"
-                !prefs.inSchedule() -> "🌙  Outside blocking hours" to
-                    "Blocking starts again at ${Fmt.clock(prefs.schedule.startMin)}."
-                else -> "🟢  Blocker is on" to "Reels, Shorts and Spotlight close automatically."
+                !enabled -> "Not protected" to "Turn on ScrollStop to block Reels, Shorts, ads and suggested posts."
+                !running -> "Paused by Android" to "Switch ScrollStop off and on again in Accessibility settings."
+                prefs.isSleeping() -> "😴 Sleep mode" to "Social apps are closed until ${Fmt.clock(prefs.sleepEnd)}."
+                prefs.isPaused() -> "⏸ On a break" to
+                    "Back on in ${Fmt.countdown(prefs.pauseUntil - System.currentTimeMillis())}"
+                !prefs.inSchedule() -> "🌙 Outside blocking hours" to "Starts at ${Fmt.clock(prefs.schedule.startMin)}."
+                else -> "🛡️ Protected" to "Reels, Shorts, ads and suggested posts are blocked."
             }
             tvStatus.text = t
             tvSub.text = if (prefs.isLocked()) "$s\n🔒 ${lockText()}" else s
         }
+        val left = listOf(enabled, ServiceState.batteryUnrestricted(this), ServiceState.notificationsAllowed(this))
+            .count { !it }
+        if (left > 0 && enabled) {
+            ui.divider(status)
+            ui.navRow(status, "Finish setup", "$left left") { setupSheet() }
+        }
 
-        // ---- setup checklist ----
-        val battery = ServiceState.batteryUnrestricted(this)
-        val notes = ServiceState.notificationsAllowed(this)
-        if (!enabled || !battery || !notes) {
-            val c = ui.card(page, "Finish setup", "So blocking keeps working in the background.")
-            setupStep(c, enabled, "Turn on the accessibility service", "Open") { showEnableDialog() }
-            setupStep(c, battery, "Let ScrollStop run in the background", "Allow") {
+        // ---- today ----
+        val today = ui.card(page)
+        val tvTime = ui.text(today, "", com.google.android.material.R.style.TextAppearance_Material3_DisplaySmall)
+        tvTime.setTypeface(tvTime.typeface, android.graphics.Typeface.BOLD)
+        tvTime.setTextColor(ui.primaryColor())
+        ui.body(today, "in social apps today", muted = true)
+        val tvLine = ui.small(today, "")
+        setTop(tvLine, 6)
+        refreshers += {
+            val appTimes = stats.appTimeOn(stats.day())
+            val total = appTimes.values.sum()
+            tvTime.text = Fmt.duration(total)
+            val inside = WebSite.entries.map { it.pkg }.distinct().sumOf { stats.get(Stats.webMs(it)) }
+            val pct = if (total > 0) (inside * 100 / total) else 0
+            tvLine.text = "${stats.get(Stats.BLOCKS)} blocked · " +
+                "${Platform.entries.sumOf { stats.get(Stats.shortCount(it)) }} short videos · $pct% locked in"
+        }
+
+        // ---- feed-free apps ----
+        ui.section(page, "Without the feeds")
+        val grid = ui.card(page)
+        WebSite.entries.chunked(3).forEach { rowSites ->
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            for (site in rowSites) {
+                val cell = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.CENTER_HORIZONTAL
+                    setPadding(0, ui.dp(8), 0, ui.dp(8))
+                    setOnClickListener { openWeb(site) }
+                }
+                cell.addView(siteIcon(site, 48))
+                ui.text(cell, site.title, com.google.android.material.R.style.TextAppearance_Material3_BodySmall)
+                    .apply { gravity = Gravity.CENTER; setTop(this, 4) }
+                row.addView(cell, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            }
+            grid.addView(row)
+        }
+
+        // ---- break ----
+        val brk = ui.card(page)
+        when {
+            prefs.isLocked() -> ui.body(brk, "Breaks are off while strict mode is on.", muted = true)
+            prefs.isPaused() -> {
+                val tv = ui.body(brk, "")
+                refreshers += { tv.text = "On a break · ${Fmt.countdown(prefs.pauseUntil - System.currentTimeMillis())} left" }
+                ui.buttonRow(brk, Triple("Resume now", Ui.Btn.FILLED) { prefs.pauseUntil = 0L; render() })
+            }
+            else -> {
+                ui.title(brk, "Take a break")
+                ui.buttonRow(
+                    brk,
+                    Triple("5 min", Ui.Btn.TONAL) { pause(5) },
+                    Triple("15 min", Ui.Btn.TONAL) { pause(15) },
+                    Triple("30 min", Ui.Btn.TONAL) { pause(30) },
+                )
+            }
+        }
+    }
+
+    private fun setupSheet() {
+        Sheet("Finish setup") { box, sheet ->
+            step(box, ServiceState.isEnabled(this), "Accessibility service") { showEnableDialog() }
+            step(box, ServiceState.batteryUnrestricted(this), "Run in the background") {
                 if (!open(ServiceState.batteryRequest(this))) open(ServiceState.batterySettings())
             }
-            setupStep(c, notes, "Get a reminder if the blocker gets switched off", "Allow") {
+            step(box, ServiceState.notificationsAllowed(this), "Reminders") {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
                 } else {
                     open(Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
                         .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, packageName))
                 }
+                handler.postDelayed({ sheet.refresh() }, 1500)
             }
-            ui.small(c, "Xiaomi, Oppo, Vivo, Realme, Samsung: also set ScrollStop's battery use to " +
-                "\"Unrestricted\" / \"No restrictions\", and on Xiaomi turn on Autostart.").setPadding(0, ui.dp(8), 0, 0)
-        }
-
-        // ---- focused browser ----
-        val web = ui.card(page, "Social apps without the feeds",
-            "Open them inside ScrollStop: the Reels, Explore and Shorts buttons are gone completely, " +
-                "and reels, ads and suggested posts are taken out of your feed.")
-        ui.buttonRow(web,
-            Triple("Instagram", Ui.Btn.FILLED) { openWeb(WebSite.INSTAGRAM) },
-            Triple("YouTube", Ui.Btn.FILLED) { openWeb(WebSite.YOUTUBE) },
-        )
-        ui.buttonRow(web,
-            Triple("Facebook", Ui.Btn.TONAL) { openWeb(WebSite.FACEBOOK) },
-            Triple("X", Ui.Btn.TONAL) { openWeb(WebSite.X) },
-        )
-        ui.buttonRow(web,
-            Triple("Reddit", Ui.Btn.TONAL) { openWeb(WebSite.REDDIT) },
-            Triple("LinkedIn", Ui.Btn.TONAL) { openWeb(WebSite.LINKEDIN) },
-        )
-        if (ShortcutManagerCompat.isRequestPinShortcutSupported(this)) {
-            ui.button(web, "Add one to your home screen", Ui.Btn.TEXT) { pinDialog() }
-        }
-
-        // ---- today ----
-        val today = ui.card(page, "Today")
-        val nums = ui.stats(today, listOf("blocked", "short videos", "in feeds"))
-        val tvApps = ui.small(today, "")
-        refreshers += {
-            nums[0].text = stats.get(Stats.BLOCKS).toString()
-            nums[1].text = Platform.entries.sumOf { stats.get(Stats.shortCount(it)) }.toString()
-            nums[2].text = Fmt.duration(Platform.entries.sumOf { stats.get(Stats.shortMs(it)) })
-            val appTime = stats.appTimeOn(stats.day()).values.sum()
-            val saved = stats.get(Stats.BLOCKS) * Stats.MINUTES_SAVED_PER_BLOCK * 60_000L
-            tvApps.text = "Time in social apps: ${Fmt.duration(appTime)} · about ${Fmt.duration(saved)} saved*"
-        }
-        ui.small(today, "*Estimate: each blocked opening ≈ ${Stats.MINUTES_SAVED_PER_BLOCK} minutes not scrolled.")
-
-        // ---- break ----
-        val brk = ui.card(page, "Take a break")
-        val tvBreak = ui.body(brk, "", muted = true)
-        if (prefs.isLocked()) {
-            tvBreak.text = "Breaks are off while strict mode is on."
-        } else if (prefs.isPaused()) {
-            ui.buttonRow(brk, Triple("Resume blocking now", Ui.Btn.FILLED) { prefs.pauseUntil = 0L; render() })
-            refreshers += {
-                tvBreak.text = "Blocking is paused for ${Fmt.countdown(prefs.pauseUntil - System.currentTimeMillis())} more."
-            }
-        } else {
-            tvBreak.text = "Pause all blocking for a little while. It comes back on by itself."
-            ui.buttonRow(
-                brk,
-                Triple("5 min", Ui.Btn.TONAL) { pause(5) },
-                Triple("15 min", Ui.Btn.TONAL) { pause(15) },
-                Triple("30 min", Ui.Btn.TONAL) { pause(30) },
-            )
+            ui.small(box, "Xiaomi, Oppo, Vivo, Realme, Samsung: also set battery use to Unrestricted, and on Xiaomi " +
+                "turn on Autostart.").also { setTop(it, 10) }
         }
     }
 
-    private fun setupStep(parent: LinearLayout, done: Boolean, label: String, action: String, onClick: () -> Unit) {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            minimumHeight = ui.dp(48)
+    private fun step(parent: LinearLayout, done: Boolean, label: String, onClick: () -> Unit) {
+        ui.navRow(parent, (if (done) "✅  " else "⬜  ") + label, if (done) "Done" else "Allow") {
+            if (!done) onClick()
         }
-        val tv = ui.text(null, (if (done) "✅  " else "⬜  ") + label,
-            com.google.android.material.R.style.TextAppearance_Material3_BodyMedium)
-        row.addView(tv, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        if (!done) ui.button(row, action, Ui.Btn.TONAL, onClick)
-        parent.addView(row)
     }
 
     private fun pause(minutes: Int) {
@@ -271,144 +278,456 @@ class MainActivity : AppCompatActivity() {
     }
 
     // =====================================================================
-    // Block
+    // Apps
     // =====================================================================
 
-    private fun buildBlock() {
-        ui.header(page, "What to block", "Feeds stay closed unless you give yourself a daily allowance.")
-        for (p in Platform.entries) platformCard(p)
+    private fun buildApps() {
+        ui.header(page, "Apps", "Tap an app to choose what to block.")
+        val list = ui.group(page)
+        Platform.entries.forEachIndexed { i, p ->
+            if (i > 0) ui.divider(list)
+            ui.navRow(list, p.app, summary(p), platformIcon(p)) { appSheet(p) }
+        }
+        ui.divider(list)
+        ui.switchRow(list, "TikTok", if (prefs.blockTiktok) "Blocked completely" else "Not blocked",
+            prefs.blockTiktok) { on, revert ->
+            if (!on && prefs.isLocked()) {
+                revert()
+                showLockedDialog()
+            } else {
+                prefs.blockTiktok = on
+                render()
+            }
+        }
+        ui.divider(list)
+        ui.navRow(list, "Other apps", prefs.appLimits.size.let { if (it == 0) "No limits" else "$it with limits" },
+            ui.icon(null, "+", ui.mutedColor())) { limitsSheet() }
 
-        val web = ui.card(page, "Web browsers")
-        toggle(web, "Block in browsers too",
-            "instagram.com/reels, youtube.com/shorts, facebook.com/reel, snapchat.com/spotlight and the other " +
-                "feeds you block, in Chrome, Firefox, Samsung Internet, Edge, Brave, Opera and more.",
+        ui.section(page, "More")
+        val more = ui.group(page)
+        toggle(more, "Block in web browsers", "Reels, Shorts and the rest in Chrome, Firefox and others",
             { prefs.blockBrowsers }, { prefs.blockBrowsers = it })
-
-        val inApp = ui.card(page, "Inside ScrollStop's social apps",
-            "Extra clean-up for Instagram, YouTube, Facebook, X, Reddit and LinkedIn opened from ScrollStop.")
-        val feedNames = mapOf("home" to "Home (Instagram's mix)", "following" to "Following: people you follow, newest first",
-            "favorites" to "Favorites only")
-        val feedRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        val feedTexts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        ui.text(feedTexts, "Instagram feed", com.google.android.material.R.style.TextAppearance_Material3_BodyLarge)
-        ui.text(feedTexts, feedNames[prefs.webIgFeed] ?: prefs.webIgFeed,
-            com.google.android.material.R.style.TextAppearance_Material3_BodySmall, muted = true)
-        feedRow.addView(feedTexts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        ui.button(feedRow, "Change", Ui.Btn.TONAL) {
-            val keys = feedNames.keys.toList()
-            MaterialAlertDialogBuilder(this)
-                .setTitle("Instagram feed")
-                .setSingleChoiceItems(keys.map { feedNames[it] }.toTypedArray(), keys.indexOf(prefs.webIgFeed)) { d, i ->
-                    if (keys[i] == "home" && prefs.webIgFeed != "home" && prefs.isLocked()) showLockedDialog()
-                    else prefs.webIgFeed = keys[i]
-                    d.dismiss()
-                    render()
-                }
-                .show()
-        }
-        inApp.addView(feedRow)
-        toggle(inApp, "Block Explore and Popular pages", "YouTube Explore, X Explore, Reddit Popular and All.",
-            { prefs.webBlockDiscover }, { prefs.webBlockDiscover = it })
-        toggle(inApp, "Hide reels in the feed", "Reel posts are removed from your Instagram home feed.",
-            { prefs.webHideFeedReels }, { prefs.webHideFeedReels = it })
-        toggle(inApp, "Hide suggested posts", "Removes posts from accounts you don't follow, \"Suggested for " +
-            "you\" rows and everything after \"You're all caught up\". Only people you follow are left.",
-            { prefs.webHideSuggested }, { prefs.webHideSuggested = it })
-        toggle(inApp, "Hide ads", "Sponsored posts, paid partnerships and promoted videos, in any language.",
-            { prefs.webHideAds }, { prefs.webHideAds = it })
-        toggle(inApp, "Instagram: messages only", "Hides the home feed too. Messages, search and profiles still work.",
-            { prefs.webIgMessagesOnly }, { prefs.webIgMessagesOnly = it })
-        ui.small(inApp, "Got a link from a friend? Share it to ScrollStop to watch just that one. To make links " +
-            "always open in ScrollStop: App info → Open by default → Add links.").setPadding(0, ui.dp(6), 0, 0)
-        ui.button(inApp, "Open by default settings", Ui.Btn.TEXT) { openByDefaultSettings() }
-
-        appsCard()
+        ui.divider(more)
+        ui.navRow(more, "Feed-free apps in ScrollStop", "Options") { webSheet() }
     }
 
-    private fun platformCard(p: Platform) {
-        val installed = p.packages.any { ServiceState.isInstalled(this, it) }
-        val c = ui.card(page, p.app + if (installed) "" else "  ·  not installed")
-        val what = when (p) {
-            Platform.INSTAGRAM -> "Reels tab and any reel you open from the feed, profiles or Explore."
-            Platform.YOUTUBE -> "Shorts tab and the Shorts player. Normal videos still work."
-            Platform.FACEBOOK -> "Reels tab and the reel player."
-            Platform.SNAPCHAT -> "The Spotlight tab."
+    /** One line about what's blocked in an app. */
+    private fun summary(p: Platform): String {
+        if (!prefs.blocked(p)) return "Allowed"
+        val a = prefs.allowance(p)
+        val parts = mutableListOf(p.feed)
+        if (p == Platform.INSTAGRAM) {
+            if (prefs.webHideSuggested) parts += "suggested"
+            if (prefs.webHideAds) parts += "ads"
         }
-        toggle(c, "Block ${p.feed}", what, { prefs.blocked(p) }, { prefs.setBlocked(p, it); render() })
-        val on = prefs.blocked(p)
-        toggle(c, "Hide the ${p.feed} button", "Covers the tab button so it can't be tapped.",
-            { prefs.hideTab(p) }, { prefs.setHideTab(p, it) }, enabled = on)
+        return parts.joinToString(", ") + if (a.isNone) "" else " · allowance"
+    }
 
-        when (p) {
-            Platform.INSTAGRAM -> {
-                toggle(c, "Use ScrollStop's Instagram instead",
-                    "Opening the Instagram app takes you to ScrollStop's version, where ads, suggested posts and " +
-                        "Reels are removed completely. Messages open your inbox. Take a break to use the real app.",
-                    { prefs.igUseScrollStop }, { prefs.igUseScrollStop = it })
-                val snoozeText = when {
-                    prefs.igSnoozedAt == 0L -> "Instagram's own setting turns them off for 30 days. ScrollStop shows " +
-                        "you where it is and reminds you to renew it."
-                    prefs.igSnoozeDue() -> "⚠️ Your 30 days are up: Instagram has turned them back on. Snooze them again."
-                    else -> "✅ Snoozed. Renew on " + SimpleDateFormat("d MMM", Locale.getDefault())
-                        .format(Date(prefs.igSnoozedAt + Prefs.SNOOZE_DAYS * Prefs.DAY_MS)) + " (you'll get a reminder)."
+    private fun appSheet(p: Platform) {
+        Sheet(p.app) { box, sheet ->
+            val on = prefs.blocked(p)
+            ui.section(box, "Block")
+            toggle(box, "Block ${p.feed}", null, { prefs.blocked(p) }, { prefs.setBlocked(p, it); sheet.refresh() })
+            toggle(box, "Hide the ${p.feed} button", null, { prefs.hideTab(p) }, { prefs.setHideTab(p, it) }, enabled = on)
+            when (p) {
+                Platform.INSTAGRAM -> {
+                    toggle(box, "Block suggested posts", "Posts from accounts you don't follow",
+                        { prefs.webHideSuggested }, { prefs.webHideSuggested = it; sheet.refresh() })
+                    toggle(box, "Block ads", "Sponsored posts and paid partnerships",
+                        { prefs.webHideAds }, { prefs.webHideAds = it; sheet.refresh() })
+                    toggle(box, "Skip past them", "Scrolls on by itself when you reach one",
+                        { prefs.igSkipHidden }, { prefs.igSkipHidden = it },
+                        enabled = prefs.webHideSuggested || prefs.webHideAds)
+                    toggle(box, "Block Explore", null, { prefs.blockIgExplore }, { prefs.blockIgExplore = it })
+                    toggle(box, "Block Stories", null, { prefs.blockIgStories }, { prefs.blockIgStories = it })
+                    toggle(box, "Allow reels sent in DMs", "Just that one, no swiping on",
+                        { prefs.allowInstagramDm }, { prefs.allowInstagramDm = it }, weakensWhen = true, enabled = on)
                 }
-                val snoozeRow = LinearLayout(this).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    minimumHeight = ui.dp(52)
-                }
-                val snoozeTexts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-                ui.text(snoozeTexts, "Suggested posts in the Instagram app",
-                    com.google.android.material.R.style.TextAppearance_Material3_BodyLarge)
-                ui.text(snoozeTexts, snoozeText, com.google.android.material.R.style.TextAppearance_Material3_BodySmall,
-                    muted = true)
-                snoozeRow.addView(snoozeTexts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                    .apply { marginEnd = ui.dp(8) })
-                ui.button(snoozeRow, "Turn off", Ui.Btn.TONAL) { snoozeDialog() }
-                c.addView(snoozeRow)
-                toggle(c, "Allow reels sent in DMs",
-                    "Watch a reel a friend sent you. Swiping on to more reels is still blocked.",
-                    { prefs.allowInstagramDm }, { prefs.allowInstagramDm = it }, weakensWhen = true, enabled = on)
-                toggle(c, "Hide Explore", "Covers the Explore grid. Search still works.",
-                    { prefs.blockIgExplore }, { prefs.blockIgExplore = it })
-                toggle(c, "Block Stories", "Closes the story viewer.",
-                    { prefs.blockIgStories }, { prefs.blockIgStories = it })
+                Platform.YOUTUBE -> toggle(box, "Search-only mode", "Hides the Home feed",
+                    { prefs.blockYtHome }, { prefs.blockYtHome = it })
+                Platform.FACEBOOK -> toggle(box, "Block the Video tab", null,
+                    { prefs.blockFbWatch }, { prefs.blockFbWatch = it })
+                Platform.SNAPCHAT -> Unit
             }
-            Platform.YOUTUBE -> toggle(c, "Search-only mode",
-                "Hides the Home feed. Search, Subscriptions and the videos you pick still work.",
-                { prefs.blockYtHome }, { prefs.blockYtHome = it })
-            Platform.FACEBOOK -> toggle(c, "Block the Video tab", "Closes Facebook Video / Watch.",
-                { prefs.blockFbWatch }, { prefs.blockFbWatch = it })
-            Platform.SNAPCHAT -> Unit
+
+            if (on) {
+                ui.section(box, "Daily allowance")
+                val a = prefs.allowance(p)
+                val value = if (a.isNone) "None" else a.describe().substringBefore(",")
+                ui.navRow(box, "Free ${p.feed} each day", value) { allowanceDialog(p) { sheet.refresh() } }
+                if (!a.isNone) {
+                    ui.small(box, "Today: ${Fmt.duration(stats.get(Stats.shortMs(p)))} · " +
+                        "${stats.get(Stats.shortCount(p))} videos")
+                }
+            }
+
+            ui.section(box, "More")
+            if (p == Platform.INSTAGRAM) {
+                toggle(box, "Use ScrollStop's Instagram instead", "Opening Instagram takes you there",
+                    { prefs.igUseScrollStop }, { prefs.igUseScrollStop = it })
+                ui.navRow(box, "Snooze in Instagram's settings", snoozeValue()) { snoozeDialog { sheet.refresh() } }
+            }
+            WebSite.entries.firstOrNull { it.platform == p }?.let { site ->
+                ui.navRow(box, "Open feed-free ${site.title}", null) { openWeb(site) }
+            }
+        }
+    }
+
+    private fun snoozeValue() = when {
+        prefs.igSnoozedAt == 0L -> "Off"
+        prefs.igSnoozeDue() -> "Ended"
+        else -> "Until " + SimpleDateFormat("d MMM", Locale.getDefault())
+            .format(Date(prefs.igSnoozedAt + Prefs.SNOOZE_DAYS * Prefs.DAY_MS))
+    }
+
+    private fun webSheet() {
+        Sheet("Feed-free apps") { box, sheet ->
+            ui.body(box, "Instagram, YouTube, Facebook, X, Reddit and LinkedIn inside ScrollStop, with the Reels, " +
+                "Explore and Shorts buttons removed.", muted = true)
+            ui.section(box, "Instagram")
+            val feedNames = mapOf("following" to "Following", "favorites" to "Favorites", "home" to "Home")
+            ui.navRow(box, "Feed", feedNames[prefs.webIgFeed]) {
+                val keys = feedNames.keys.toList()
+                MaterialAlertDialogBuilder(this)
+                    .setTitle("Instagram feed")
+                    .setSingleChoiceItems(arrayOf("Following: people you follow, newest first", "Favorites only",
+                        "Home: Instagram's mix"), keys.indexOf(prefs.webIgFeed)) { d, i ->
+                        if (keys[i] == "home" && prefs.webIgFeed != "home" && prefs.isLocked()) showLockedDialog()
+                        else prefs.webIgFeed = keys[i]
+                        d.dismiss()
+                        sheet.refresh()
+                    }
+                    .show()
+            }
+            toggle(box, "Hide reels in the feed", null, { prefs.webHideFeedReels }, { prefs.webHideFeedReels = it })
+            toggle(box, "Messages only", "Hides the feed too", { prefs.webIgMessagesOnly }, { prefs.webIgMessagesOnly = it })
+            ui.section(box, "All of them")
+            toggle(box, "Block suggested posts", null, { prefs.webHideSuggested }, { prefs.webHideSuggested = it })
+            toggle(box, "Block ads", null, { prefs.webHideAds }, { prefs.webHideAds = it })
+            toggle(box, "Block Explore and Popular", "YouTube, X and Reddit",
+                { prefs.webBlockDiscover }, { prefs.webBlockDiscover = it })
+            ui.section(box, "Shortcuts")
+            ui.navRow(box, "Open links in ScrollStop", null) { openByDefaultSettings() }
+            if (ShortcutManagerCompat.isRequestPinShortcutSupported(this)) {
+                ui.navRow(box, "Add to home screen", null) { pinDialog() }
+            }
+        }
+    }
+
+    private fun limitsSheet() {
+        Sheet("Other apps") { box, sheet ->
+            ui.body(box, "Block an app completely, or close it after a while each day.", muted = true)
+            val limits = prefs.appLimits
+            if (limits.isNotEmpty()) ui.section(box, "Limits")
+            val today = stats.appTimeOn(stats.day())
+            for ((pkg, min) in limits.entries.sortedBy { appLabel(it.key).lowercase() }) {
+                val value = if (min == 0) "Blocked" else "${Fmt.duration(min * 60_000L)} · ${Fmt.duration(today[pkg] ?: 0L)} used"
+                ui.navRow(box, appLabel(pkg), value, ui.icon(appIcon(pkg), appLabel(pkg).take(1), ui.mutedColor())) {
+                    limitDialog(pkg) { sheet.refresh() }
+                }
+            }
+            ui.space(box, 8)
+            ui.button(box, "Add an app", Ui.Btn.TONAL) { pickAppDialog { sheet.refresh() } }
+        }
+    }
+
+    // =====================================================================
+    // Stats
+    // =====================================================================
+
+    private fun buildStats() {
+        ui.header(page, "Stats", null)
+        val appTimes = stats.appTimeOn(stats.day())
+        val total = appTimes.values.sum()
+
+        val today = ui.card(page)
+        val big = ui.text(today, Fmt.duration(total), com.google.android.material.R.style.TextAppearance_Material3_DisplaySmall)
+        big.setTypeface(big.typeface, android.graphics.Typeface.BOLD)
+        big.setTextColor(ui.primaryColor())
+        ui.body(today, "in social apps today", muted = true)
+        val inside = WebSite.entries.map { it.pkg }.distinct().sumOf { stats.get(Stats.webMs(it)) }
+        val nums = ui.stats(today, listOf("blocked", "short videos", "locked in"))
+        nums[0].text = stats.get(Stats.BLOCKS).toString()
+        nums[1].text = Platform.entries.sumOf { stats.get(Stats.shortCount(it)) }.toString()
+        nums[2].text = "${if (total > 0) inside * 100 / total else 0}%"
+
+        // ---- last 7 days ----
+        val week = ui.card(page, "Last 7 days")
+        val chart = BarChartView(this)
+        val dayFmt = SimpleDateFormat("EEE", Locale.getDefault())
+        val keyFmt = SimpleDateFormat("yyyyMMdd", Locale.US)
+        chart.bars = (6 downTo 0).map { ago ->
+            val key = stats.day(ago)
+            val ms = stats.appTimeOn(key).values.sum()
+            val label = runCatching { dayFmt.format(keyFmt.parse(key)!!) }.getOrDefault(key.takeLast(2))
+            BarChartView.Bar(ms / 60_000f, label, Fmt.duration(ms), ago == 0)
+        }
+        week.addView(chart)
+        val appWeek = (0..6).sumOf { stats.appTimeOn(stats.day(it)).values.sum() }
+        ui.small(week, "Daily average ${Fmt.duration(appWeek / 7)}")
+
+        // ---- by app ----
+        val rows = appTimes.entries.filter { it.value >= 60_000 }.sortedByDescending { it.value }
+        if (rows.isNotEmpty()) {
+            ui.section(page, "Today by app")
+            val apps = ui.group(page)
+            rows.forEachIndexed { i, (pkg, ms) ->
+                if (i > 0) ui.divider(apps)
+                val p = Platform.of(pkg)
+                val detail = p?.let { " · ${stats.get(Stats.shortCount(it))} ${it.feed.lowercase()}" } ?: ""
+                ui.navRow(apps, appLabel(pkg), Fmt.duration(ms) + detail,
+                    ui.icon(appIcon(pkg), appLabel(pkg).take(1), ui.mutedColor()), null)
+            }
         }
 
-        if (on) {
-            ui.divider(c)
-            val row = LinearLayout(this).apply {
+        // ---- all time ----
+        val all = ui.card(page, "All time")
+        val totalBlocks = stats.get(Stats.BLOCKS, Stats.ALL)
+        val nums2 = ui.stats(all, listOf("blocked", "saved (estimate)"))
+        nums2[0].text = totalBlocks.toString()
+        nums2[1].text = Fmt.duration(totalBlocks * Stats.MINUTES_SAVED_PER_BLOCK * 60_000L)
+
+        ui.button(page, "Reset stats", Ui.Btn.TEXT) {
+            MaterialAlertDialogBuilder(this)
+                .setTitle("Reset all stats?")
+                .setMessage("Today's allowance counters are reset too.")
+                .setPositiveButton("Reset") { _, _ ->
+                    if (prefs.isLocked()) showLockedDialog() else {
+                        stats.resetAll()
+                        render()
+                    }
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
+    }
+
+    // =====================================================================
+    // Settings
+    // =====================================================================
+
+    private fun buildSettings() {
+        ui.header(page, "Settings", null)
+        val main = ui.group(page)
+        ui.navRow(main, "Strict mode", if (prefs.isLocked()) "On 🔒" else "Off") { strictSheet() }
+        ui.divider(main)
+        ui.navRow(main, "Sleep mode",
+            if (prefs.sleepOn) "${Fmt.clock(prefs.sleepStart)} – ${Fmt.clock(prefs.sleepEnd)}" else "Off") { sleepSheet() }
+        ui.divider(main)
+        val s = prefs.schedule
+        ui.navRow(main, "Blocking hours", if (s.enabled) "${Fmt.clock(s.startMin)} – ${Fmt.clock(s.endMin)}" else "Always") {
+            hoursSheet()
+        }
+        ui.divider(main)
+        filterSwitch(main) { render() }
+
+        val look = ui.group(page)
+        toggle(look, "Full-screen reminder", "When something is blocked",
+            { prefs.showBlockScreen }, { prefs.showBlockScreen = it })
+        ui.divider(look)
+        ui.navRow(look, "Reminder text", prefs.customMessage.ifBlank { "Random" }) { messageDialog() }
+
+        val other = ui.group(page)
+        ui.navRow(other, "Help", null) { helpSheet() }
+        ui.divider(other)
+        ui.navRow(other, "About", BuildConfig.VERSION_NAME) {
+            MaterialAlertDialogBuilder(this)
+                .setTitle("ScrollStop ${BuildConfig.VERSION_NAME}")
+                .setMessage("The blocker works offline and never sends anything anywhere. Internet is only used to " +
+                    "load the social sites you open inside ScrollStop, and by the optional adult filter.")
+                .setPositiveButton("OK", null)
+                .show()
+        }
+    }
+
+    private fun filterSwitch(parent: LinearLayout, after: () -> Unit) {
+        val sub = if (!prefs.adultFilter) "Blocks adult sites everywhere"
+        else if (FilterVpnService.running) "On" else "Not running: switch off and on"
+        toggle(parent, "Adult content filter", sub, { prefs.adultFilter }, { on ->
+            if (on) {
+                val ask = VpnService.prepare(this)
+                if (ask == null) {
+                    prefs.adultFilter = true
+                    FilterVpnService.start(this)
+                    handler.postDelayed(after, 600)
+                } else {
+                    afterVpn = after
+                    askVpn.launch(ask)
+                }
+            } else {
+                prefs.adultFilter = false
+                FilterVpnService.stop(this)
+                handler.postDelayed(after, 600)
+            }
+        })
+    }
+
+    private fun strictSheet() {
+        Sheet("Strict mode") { box, sheet ->
+            ui.body(box, "While it's on: no breaks, no turning blocks off, no bigger allowances, and ScrollStop can't " +
+                "be switched off or uninstalled.", muted = true)
+            ui.space(box, 10)
+            if (prefs.isLocked()) {
+                ui.title(box, "🔒 " + lockText()).setPadding(0, 0, 0, ui.dp(8))
+                when (prefs.lockType) {
+                    LockType.PIN -> ui.button(box, "Unlock with PIN", Ui.Btn.TONAL) { unlockDialog { sheet.refresh() } }
+                    LockType.PHRASE -> ui.button(box, "Unlock", Ui.Btn.TONAL) { unlockDialog { sheet.refresh() } }
+                    else -> Unit
+                }
+            } else {
+                ui.button(box, "Turn on strict mode") { strictDialog { sheet.refresh() } }
+            }
+            ui.space(box, 6)
+            toggle(box, "Protect ScrollStop", "Closes the settings screens that could turn it off",
+                { prefs.guardSettings }, { prefs.guardSettings = it })
+        }
+    }
+
+    private fun sleepSheet() {
+        Sheet("Sleep mode") { box, sheet ->
+            ui.body(box, "Social apps close at bedtime and open again when you wake up.", muted = true)
+            toggle(box, "Sleep mode", null, { prefs.sleepOn }, { prefs.sleepOn = it; sheet.refresh() })
+            if (!prefs.sleepOn) return@Sheet
+            ui.buttonRow(box,
+                Triple("Bedtime ${Fmt.clock(prefs.sleepStart)}", Ui.Btn.OUTLINED) { pickSleepTime(true) { sheet.refresh() } },
+                Triple("Wake ${Fmt.clock(prefs.sleepEnd)}", Ui.Btn.OUTLINED) { pickSleepTime(false) { sheet.refresh() } },
+            )
+            dayChips(box, prefs.sleepDays) { days ->
+                val new = Sleep.window(true, prefs.sleepStart, prefs.sleepEnd, days)
+                if (prefs.isLocked() && Sleep.weakens(prefs.sleepWindow(), new)) false
+                else {
+                    prefs.sleepDays = days
+                    true
+                }
+            }
+            val reminders = listOf(0, 15, 30, 60)
+            ui.navRow(box, "Heads-up before bedtime", if (prefs.sleepReminder == 0) "Off" else "${prefs.sleepReminder} min") {
+                MaterialAlertDialogBuilder(this)
+                    .setTitle("Heads-up before bedtime")
+                    .setItems(arrayOf("Off", "15 minutes before", "30 minutes before", "1 hour before")) { _, i ->
+                        prefs.sleepReminder = reminders[i]
+                        sheet.refresh()
+                    }
+                    .show()
+            }
+        }
+    }
+
+    private fun hoursSheet() {
+        Sheet("Blocking hours") { box, sheet ->
+            val s = prefs.schedule
+            toggle(box, "Only block at certain times", "Outside these hours everything is allowed",
+                { prefs.schedule.enabled }, { prefs.schedule = prefs.schedule.copy(enabled = it); sheet.refresh() },
+                weakensWhen = true)
+            if (!s.enabled) return@Sheet
+            ui.buttonRow(box,
+                Triple("From ${Fmt.clock(s.startMin)}", Ui.Btn.OUTLINED) { pickTime(true) { sheet.refresh() } },
+                Triple("To ${Fmt.clock(s.endMin)}", Ui.Btn.OUTLINED) { pickTime(false) { sheet.refresh() } },
+            )
+            dayChips(box, s.days) { days ->
+                val cur = prefs.schedule
+                val next = cur.copy(days = days)
+                if (prefs.isLocked() && next.weakerThan(cur)) false
+                else {
+                    prefs.schedule = next
+                    true
+                }
+            }
+        }
+    }
+
+    private fun helpSheet() {
+        Sheet("Help") { box, _ ->
+            ui.body(box,
+                "• Android can turn accessibility apps off after updates. Turn ScrollStop on again.\n" +
+                    "• Android 13+: switch greyed out? App info → ⋮ → \"Allow restricted settings\".\n" +
+                    "• Xiaomi, Oppo, Vivo, Realme, Samsung: set battery use to Unrestricted.\n" +
+                    "• After an update, switch ScrollStop off and on once so it can skip past hidden posts.",
+                muted = true)
+            ui.space(box, 6)
+            ui.navRow(box, "Accessibility settings", null) { open(ServiceState.accessibilitySettings()) }
+            ui.navRow(box, "App info", null) { open(ServiceState.appInfo(this)) }
+            ui.navRow(box, "Battery settings", null) {
+                if (!open(ServiceState.batteryRequest(this))) open(ServiceState.batterySettings())
+            }
+            ui.navRow(box, "Something isn't blocked?", "Capture") { captureDialog() }
+        }
+    }
+
+    /** Asks the service to save the layout of the next social-app screen, to send to the developer. */
+    private fun captureDialog() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Capture a screen layout")
+            .setMessage("Open Instagram (or YouTube, Facebook, Snapchat) on the screen where something isn't blocked " +
+                "and wait 3 seconds. ScrollStop saves that screen's layout and shows a notification to share it.\n\n" +
+                "The file lists the screen's buttons and labels, including names and captions on screen. Only " +
+                "share it with someone you trust.")
+            .setPositiveButton("Start") { _, _ ->
+                if (!BlockerService.isRunning) toast("Turn on ScrollStop first")
+                else {
+                    BlockerService.requestCapture()
+                    toast("Now open the app and wait 3 seconds")
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun dayChips(parent: LinearLayout, days: Int, onChange: (Int) -> Boolean) {
+        val group = ChipGroup(this)
+        listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun").forEachIndexed { i, n ->
+            val chip = Chip(android.view.ContextThemeWrapper(this, R.style.ThemeOverlay_ScrollStop_FilterChip)).apply {
+                text = n
+                isCheckable = true
+                isChecked = days and (1 shl i) != 0
+            }
+            chip.setOnCheckedChangeListener { v, checked ->
+                val cur = (0 until group.childCount).fold(0) { acc, k ->
+                    if ((group.getChildAt(k) as Chip).isChecked) acc or (1 shl k) else acc
+                }
+                if (!onChange(cur)) {
+                    v.isChecked = !checked
+                    showLockedDialog()
+                }
+            }
+            group.addView(chip)
+        }
+        parent.addView(group)
+    }
+
+    // =====================================================================
+    // Bottom sheets
+    // =====================================================================
+
+    /** A bottom sheet whose content is rebuilt by [build] each time [refresh] is called. */
+    private inner class Sheet(private val title: String, private val build: (LinearLayout, Sheet) -> Unit) {
+        val dialog = BottomSheetDialog(this@MainActivity)
+        private val box = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(ui.dp(20), ui.dp(4), ui.dp(20), ui.dp(28))
+        }
+
+        init {
+            dialog.setContentView(ScrollView(this@MainActivity).apply { addView(box) })
+            dialog.behavior.skipCollapsed = true
+            dialog.behavior.state = BottomSheetBehavior.STATE_EXPANDED
+            dialog.setOnDismissListener { render() }
+            refresh()
+            dialog.show()
+        }
+
+        fun refresh() {
+            box.removeAllViews()
+            val head = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
             }
-            val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-            ui.text(texts, "Daily allowance", com.google.android.material.R.style.TextAppearance_Material3_BodyLarge)
-            val a = prefs.allowance(p)
-            val tvA = ui.text(texts, "", com.google.android.material.R.style.TextAppearance_Material3_BodySmall, muted = true)
-            row.addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            ui.button(row, "Change", Ui.Btn.TONAL) { allowanceDialog(p) }
-            c.addView(row)
-            refreshers += {
-                val usedMs = stats.get(Stats.shortMs(p))
-                val usedN = stats.get(Stats.shortCount(p))
-                val left = buildList {
-                    a.msLeft(usedMs)?.let { add("${Fmt.duration(it)} left") }
-                    a.videosLeft(usedN)?.let { add("$it videos left") }
-                }
-                tvA.text = if (a.isNone) a.describe()
-                else a.describe() + "\nToday: ${Fmt.duration(usedMs)} · $usedN videos" +
-                    (if (left.isEmpty()) "" else " · " + left.joinToString(" · "))
-            }
+            val t = ui.text(null, title, com.google.android.material.R.style.TextAppearance_Material3_TitleLarge)
+            t.setTypeface(t.typeface, android.graphics.Typeface.BOLD)
+            head.addView(t, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            ui.button(head, "Done", Ui.Btn.TEXT) { dialog.dismiss() }
+            box.addView(head)
+            build(box, this)
         }
     }
 
@@ -435,16 +754,20 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun allowanceDialog(p: Platform) {
+    // =====================================================================
+    // Dialogs
+    // =====================================================================
+
+    private fun allowanceDialog(p: Platform, then: () -> Unit) {
         val old = prefs.allowance(p)
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(ui.dp(24), ui.dp(8), ui.dp(24), 0)
         }
-        ui.body(box, "Watch a little each day, then ${p.feed} closes until tomorrow. " +
-            "Leave both at Off to block right away.", muted = true)
+        ui.body(box, "Watch a little each day, then ${p.feed} closes until tomorrow. Both Off = blocked right away.",
+            muted = true)
         val tvMin = ui.text(box, "", com.google.android.material.R.style.TextAppearance_Material3_TitleSmall)
-        tvMin.setPadding(0, ui.dp(16), 0, 0)
+        setTop(tvMin, 16)
         val sMin = Slider(this).apply { valueFrom = 0f; valueTo = 60f; stepSize = 1f; value = old.minutes.coerceIn(0, 60).toFloat() }
         box.addView(sMin)
         val tvN = ui.text(box, "", com.google.android.material.R.style.TextAppearance_Material3_TitleSmall)
@@ -465,48 +788,16 @@ class MainActivity : AppCompatActivity() {
                 if (prefs.isLocked() && new.allowsMoreThan(old)) showLockedDialog()
                 else {
                     prefs.setAllowance(p, new)
-                    render()
+                    then()
                 }
             }
             .setNegativeButton("Cancel", null)
             .show()
     }
 
-    // ---- whole apps ----
-
-    private fun appsCard() {
-        val c = ui.card(page, "Whole apps & time limits",
-            "Block an app completely, or close it once you've used it for a while each day.")
-        toggle(c, "Block TikTok completely", null, { prefs.blockTiktok }, { prefs.blockTiktok = it })
-        val limits = prefs.appLimits
-        val today = stats.appTimeOn(stats.day())
-        for ((pkg, min) in limits.entries.sortedBy { appLabel(it.key).lowercase() }) {
-            ui.divider(c)
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
-            appIcon(pkg)?.let { d ->
-                row.addView(ImageView(this).apply { setImageDrawable(d) },
-                    LinearLayout.LayoutParams(ui.dp(36), ui.dp(36)).apply { marginEnd = ui.dp(12) })
-            }
-            val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-            ui.text(texts, appLabel(pkg), com.google.android.material.R.style.TextAppearance_Material3_BodyLarge)
-            val used = today[pkg] ?: 0L
-            ui.text(texts, if (min == 0) "Blocked completely"
-            else "${Fmt.duration(min * 60_000L)} a day · ${Fmt.duration(used)} used today",
-                com.google.android.material.R.style.TextAppearance_Material3_BodySmall, muted = true)
-            row.addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            ui.button(row, "Edit", Ui.Btn.TEXT) { limitDialog(pkg) }
-            c.addView(row)
-        }
-        ui.space(c, 6)
-        ui.button(c, "Add an app", Ui.Btn.TONAL) { pickAppDialog() }
-    }
-
     private data class AppEntry(val pkg: String, val label: String, val icon: Drawable?)
 
-    private fun pickAppDialog() {
+    private fun pickAppDialog(then: () -> Unit) {
         val i = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         @Suppress("DEPRECATION")
         val apps = packageManager.queryIntentActivities(i, 0)
@@ -531,15 +822,15 @@ class MainActivity : AppCompatActivity() {
         }
         MaterialAlertDialogBuilder(this)
             .setTitle("Choose an app")
-            .setAdapter(adapter) { _, which -> limitDialog(apps[which].pkg) }
+            .setAdapter(adapter) { _, which -> limitDialog(apps[which].pkg, then) }
             .setNegativeButton("Cancel", null)
             .show()
     }
 
-    private fun limitDialog(pkg: String) {
+    private fun limitDialog(pkg: String, then: () -> Unit) {
         val current = prefs.appLimits[pkg]
         val values = listOf(0, 5, 15, 30, 45, 60, 90, 120, 180)
-        val labels = values.map { if (it == 0) "Block completely" else "${Fmt.duration(it * 60_000L)} a day" }.toMutableList()
+        val labels = values.map { if (it == 0) "Block completely" else "${Fmt.duration(it * 60_000L)} a day" }
         val b = MaterialAlertDialogBuilder(this)
             .setTitle(appLabel(pkg))
             .setItems(labels.toTypedArray()) { _, which ->
@@ -547,7 +838,7 @@ class MainActivity : AppCompatActivity() {
                 if (prefs.isLocked() && AppLimits.weakens(current, new)) showLockedDialog()
                 else {
                     prefs.appLimits = prefs.appLimits + (pkg to new)
-                    render()
+                    then()
                 }
             }
             .setNegativeButton("Cancel", null)
@@ -555,159 +846,10 @@ class MainActivity : AppCompatActivity() {
             if (prefs.isLocked()) showLockedDialog()
             else {
                 prefs.appLimits = prefs.appLimits - pkg
-                render()
+                then()
             }
         }
         b.show()
-    }
-
-    // =====================================================================
-    // Stats
-    // =====================================================================
-
-    private fun buildStats() {
-        ui.header(page, "Stats", "Kept on this phone only.")
-
-        val today = ui.card(page, "Today")
-        val nums = ui.stats(today, listOf("blocked", "short videos", "in feeds"))
-        nums[0].text = stats.get(Stats.BLOCKS).toString()
-        nums[1].text = Platform.entries.sumOf { stats.get(Stats.shortCount(it)) }.toString()
-        nums[2].text = Fmt.duration(Platform.entries.sumOf { stats.get(Stats.shortMs(it)) })
-
-        // ---- last 7 days ----
-        val week = ui.card(page, "Last 7 days", "Time in social apps each day")
-        val chart = BarChartView(this)
-        val dayFmt = SimpleDateFormat("EEE", Locale.getDefault())
-        val keyFmt = SimpleDateFormat("yyyyMMdd", Locale.US)
-        val bars = (6 downTo 0).map { ago ->
-            val key = stats.day(ago)
-            val ms = stats.appTimeOn(key).values.sum()
-            val label = runCatching { dayFmt.format(keyFmt.parse(key)!!) }.getOrDefault(key.takeLast(2))
-            BarChartView.Bar((ms / 60_000f), label, Fmt.duration(ms), ago == 0)
-        }
-        chart.bars = bars
-        week.addView(chart)
-        val blocksWeek = (6 downTo 0).sumOf { stats.get(Stats.BLOCKS, stats.day(it)) }
-        val appWeek = (0..6).sumOf { stats.appTimeOn(stats.day(it)).values.sum() }
-        ui.small(week, "This week: ${Fmt.duration(appWeek)} in social apps · $blocksWeek blocked · " +
-            "daily average ${Fmt.duration(appWeek / 7)}")
-
-        // ---- per app today ----
-        val apps = ui.card(page, "By app, today")
-        val appTimes = stats.appTimeOn(stats.day())
-        var any = false
-        for (p in Platform.entries) {
-            val app = p.packages.sumOf { appTimes[it] ?: 0L }
-            val feedMs = stats.get(Stats.shortMs(p))
-            val n = stats.get(Stats.shortCount(p))
-            val b = stats.get(Stats.blocks(p.key))
-            if (app == 0L && feedMs == 0L && n == 0L && b == 0L) continue
-            any = true
-            ui.text(apps, "${p.app}  ·  ${Fmt.duration(app)}", com.google.android.material.R.style.TextAppearance_Material3_BodyLarge)
-            ui.small(apps, "${p.feed}: ${Fmt.duration(feedMs)} · $n videos · $b blocked").setPadding(0, 0, 0, ui.dp(8))
-        }
-        val others = appTimes.filterKeys { Platform.of(it) == null }
-        for ((pkg, ms) in others.entries.sortedByDescending { it.value }) {
-            if (ms < 1000) continue
-            any = true
-            ui.text(apps, "${appLabel(pkg)}  ·  ${Fmt.duration(ms)}", com.google.android.material.R.style.TextAppearance_Material3_BodyLarge)
-                .setPadding(0, 0, 0, ui.dp(8))
-        }
-        val web = stats.get(Stats.blocks("web"))
-        if (web > 0) {
-            any = true
-            ui.small(apps, "Blocked in browsers: $web")
-        }
-        if (!any) ui.body(apps, "Nothing yet today. 🎉", muted = true)
-
-        // ---- locked in: how much social time happened inside ScrollStop's focused apps ----
-        val totalSocial = appTimes.values.sum()
-        val inside = WebSite.entries.map { it.pkg }.distinct().sumOf { stats.get(Stats.webMs(it)) }
-        val locked = ui.card(page, "Locked in today", "Share of your social time spent in ScrollStop's feed-free apps.")
-        val pct = if (totalSocial > 0) (inside * 100 / totalSocial).toInt() else 0
-        val lockedNums = ui.stats(locked, listOf("locked in", "inside ScrollStop"))
-        lockedNums[0].text = "$pct%"
-        lockedNums[1].text = Fmt.duration(inside)
-
-        // ---- all time ----
-        val all = ui.card(page, "All time")
-        val total = stats.get(Stats.BLOCKS, Stats.ALL)
-        val nums2 = ui.stats(all, listOf("blocked", "saved (estimate)"))
-        nums2[0].text = total.toString()
-        nums2[1].text = Fmt.duration(total * Stats.MINUTES_SAVED_PER_BLOCK * 60_000L)
-
-        ui.button(page, "Reset stats", Ui.Btn.TEXT) {
-            MaterialAlertDialogBuilder(this)
-                .setTitle("Reset all stats?")
-                .setMessage("Today's allowance counters are reset too.")
-                .setPositiveButton("Reset") { _, _ ->
-                    if (prefs.isLocked()) showLockedDialog() else {
-                        stats.resetAll()
-                        render()
-                    }
-                }
-                .setNegativeButton("Cancel", null)
-                .show()
-        }
-    }
-
-    // =====================================================================
-    // Settings
-    // =====================================================================
-
-    private fun buildSettings() {
-        ui.header(page, "Settings", null)
-        strictCard()
-        sleepCard()
-        filterCard()
-        scheduleCard()
-
-        val bs = ui.card(page, "When something is blocked")
-        toggle(bs, "Show a full-screen reminder", "Otherwise a short message pops up at the bottom.",
-            { prefs.showBlockScreen }, { prefs.showBlockScreen = it })
-        val msg = prefs.customMessage
-        ui.body(bs, if (msg.isBlank()) "Reminder text: a random nudge" else "Reminder text: \"$msg\"", muted = true)
-            .setPadding(0, ui.dp(4), 0, 0)
-        ui.button(bs, "Write your own reminder", Ui.Btn.TONAL) { messageDialog() }
-
-        val help = ui.card(page, "If blocking stops working")
-        ui.body(help,
-            "• Android can switch accessibility services off after updates or restarts. Turn ScrollStop on again.\n" +
-                "• Android 13+: if the switch is greyed out, open App info → ⋮ menu → \"Allow restricted settings\", then try again.\n" +
-                "• Xiaomi, Oppo, Vivo, Realme, Samsung: set battery use to Unrestricted. On Xiaomi also turn on Autostart.\n" +
-                "• After an Instagram or YouTube update a block can stop working. The IDs ScrollStop looks for are in Rules.kt.",
-            muted = true)
-        ui.space(help, 6)
-        ui.button(help, "Accessibility settings", Ui.Btn.OUTLINED) { open(ServiceState.accessibilitySettings()) }
-        ui.button(help, "App info", Ui.Btn.OUTLINED) { open(ServiceState.appInfo(this)) }
-        ui.button(help, "Battery settings", Ui.Btn.OUTLINED) {
-            if (!open(ServiceState.batteryRequest(this))) open(ServiceState.batterySettings())
-        }
-
-        val about = ui.card(page, "About")
-        ui.body(about, "ScrollStop ${BuildConfig.VERSION_NAME}\nThe blocker works offline and never sends anything anywhere. " +
-            "Internet is only used to load the social sites you open inside ScrollStop, and by the optional adult filter.",
-            muted = true)
-    }
-
-    private fun strictCard() {
-        val c = ui.card(page, "Strict mode",
-            "Locks your settings so blocking can't be loosened on a whim: no breaks, no turning blocks off, " +
-                "no bigger allowances, and ScrollStop can't be switched off or uninstalled.")
-        if (prefs.isLocked()) {
-            val tv = ui.title(c, "")
-            refreshers += { tv.text = "🔒 " + lockText() }
-            when (prefs.lockType) {
-                LockType.PIN -> ui.button(c, "Unlock with PIN", Ui.Btn.TONAL) { unlockDialog() }
-                LockType.PHRASE -> ui.button(c, "Unlock by typing the sentence", Ui.Btn.TONAL) { unlockDialog() }
-                else -> Unit
-            }
-        } else {
-            ui.button(c, "Turn on strict mode") { strictDialog() }
-        }
-        toggle(c, "Protect ScrollStop", "While strict mode is on, Settings screens that could switch " +
-            "ScrollStop off or uninstall it close right away.",
-            { prefs.guardSettings }, { prefs.guardSettings = it })
     }
 
     private fun lockText(): String = when (prefs.lockType) {
@@ -715,29 +857,23 @@ class MainActivity : AppCompatActivity() {
             val left = prefs.lockUntil - System.currentTimeMillis()
             val at = SimpleDateFormat(if (left < 20 * 3_600_000L) "h:mm a" else "EEE d MMM, h:mm a", Locale.getDefault())
                 .format(Date(prefs.lockUntil))
-            "Strict mode until $at (${Fmt.duration(left)} left)"
+            "Until $at (${Fmt.duration(left)} left)"
         }
-        LockType.PIN -> "Strict mode is on until the PIN is entered"
-        LockType.PHRASE -> "Strict mode is on until you type the sentence"
-        LockType.NONE -> "Strict mode is off"
+        LockType.PIN -> "On until the PIN is entered"
+        LockType.PHRASE -> "On until you type the sentence"
+        LockType.NONE -> "Off"
     }
 
-    private fun strictDialog() {
-        val kinds = arrayOf(
-            "Timer: locked for a set time",
-            "PIN: someone else keeps the code",
-            "Sentence: type it out to unlock",
-        )
+    private fun strictDialog(then: () -> Unit) {
         MaterialAlertDialogBuilder(this)
             .setTitle("How should it unlock?")
-            .setItems(kinds) { _, which ->
+            .setItems(arrayOf("After a set time", "With a PIN someone else keeps", "By typing a sentence")) { _, which ->
                 when (which) {
-                    0 -> timerDialog()
-                    1 -> pinSetupDialog()
-                    else -> confirm("Turn on strict mode?",
-                        "To unlock you'll need to type:\n\n\"${Lock.PHRASE}\"") {
+                    0 -> timerDialog(then)
+                    1 -> pinSetupDialog(then)
+                    else -> confirm("Turn on strict mode?", "To unlock you'll type:\n\n\"${Lock.PHRASE}\"") {
                         prefs.lockType = LockType.PHRASE
-                        afterLock()
+                        afterLock(then)
                     }
                 }
             }
@@ -745,24 +881,23 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun timerDialog() {
+    private fun timerDialog(then: () -> Unit) {
         val hours = listOf(1, 4, 8, 24, 72, 168)
         val labels = arrayOf("1 hour", "4 hours", "8 hours", "1 day", "3 days", "1 week")
         MaterialAlertDialogBuilder(this)
             .setTitle("Lock for")
             .setItems(labels) { _, which ->
-                confirm("Lock for ${labels[which]}?",
-                    "There is no way to unlock early, so be sure.") {
+                confirm("Lock for ${labels[which]}?", "There's no way to unlock early.") {
                     prefs.lockUntil = System.currentTimeMillis() + hours[which] * 3_600_000L
                     prefs.lockType = LockType.TIMER
-                    afterLock()
+                    afterLock(then)
                 }
             }
             .setNegativeButton("Cancel", null)
             .show()
     }
 
-    private fun pinSetupDialog() {
+    private fun pinSetupDialog(then: () -> Unit) {
         val input = pinInput("New PIN (4–8 digits)")
         MaterialAlertDialogBuilder(this)
             .setTitle("Set a PIN")
@@ -781,7 +916,7 @@ class MainActivity : AppCompatActivity() {
                             else {
                                 prefs.lockPinHash = Lock.hashPin(pin, prefs.salt)
                                 prefs.lockType = LockType.PIN
-                                afterLock()
+                                afterLock(then)
                             }
                         }
                         .setNegativeButton("Cancel", null)
@@ -792,13 +927,13 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun afterLock() {
+    private fun afterLock(then: () -> Unit) {
         prefs.pauseUntil = 0L
         toast("Strict mode is on 🔒")
-        render()
+        then()
     }
 
-    private fun unlockDialog() {
+    private fun unlockDialog(then: () -> Unit) {
         val isPin = prefs.lockType == LockType.PIN
         val input = if (isPin) pinInput("PIN") else EditText(this).apply {
             hint = Lock.PHRASE
@@ -814,7 +949,7 @@ class MainActivity : AppCompatActivity() {
                 if (ok) {
                     prefs.unlock()
                     toast("Strict mode is off")
-                    render()
+                    then()
                 } else {
                     toast(if (isPin) "Wrong PIN" else "That didn't match. Staying focused 💪")
                 }
@@ -829,115 +964,26 @@ class MainActivity : AppCompatActivity() {
             .setMessage(lockText() + ".\n\nYou can make blocking stricter, but not looser.")
             .setPositiveButton("OK", null)
         if (prefs.lockType == LockType.PIN || prefs.lockType == LockType.PHRASE) {
-            b.setNeutralButton("Unlock") { _, _ -> unlockDialog() }
+            b.setNeutralButton("Unlock") { _, _ -> unlockDialog { render() } }
         }
         b.show()
     }
 
-    // ---- Instagram app: snooze suggested posts ----
-
-    private fun snoozeDialog() {
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Turn off suggested posts in Instagram")
-            .setMessage(
-                "Instagram has its own switch for this. It lasts 30 days, then Instagram turns it back on, " +
-                    "so ScrollStop will remind you.\n\n" +
-                    "1. In Instagram, go to your profile and tap ☰ (top right)\n" +
-                    "2. Under \"What you see\", tap \"Suggested content\"\n" +
-                    "3. Turn on \"Snooze suggested posts in feed\"\n\n" +
-                    "Can't find it? Type \"suggested\" in the search bar at the top of Instagram's settings.\n\n" +
-                    "Ads can't be switched off in the Instagram app. For no ads and no suggestions at all, use " +
-                    "ScrollStop's Instagram."
-            )
-            .setPositiveButton("I've snoozed them") { _, _ ->
-                prefs.igSnoozedAt = System.currentTimeMillis()
-                prefs.igSnoozeRemindedAt = 0L
-                toast("ScrollStop will remind you in 30 days")
-                render()
+    private fun pickTime(start: Boolean, then: () -> Unit) {
+        val cur = prefs.schedule
+        val m = if (start) cur.startMin else cur.endMin
+        TimePickerDialog(this, { _, h, min ->
+            val v = h * 60 + min
+            val next = if (start) cur.copy(startMin = v) else cur.copy(endMin = v)
+            if (prefs.isLocked() && next.weakerThan(cur)) showLockedDialog()
+            else {
+                prefs.schedule = next
+                then()
             }
-            .setNeutralButton("Open Instagram") { _, _ ->
-                val launch = packageManager.getLaunchIntentForPackage("com.instagram.android")
-                if (launch == null || !open(launch)) toast("Instagram isn't installed")
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
+        }, m / 60, m % 60, android.text.format.DateFormat.is24HourFormat(this)).show()
     }
 
-    // ---- sleep mode ----
-
-    private fun sleepCard() {
-        val c = ui.card(page, "Sleep mode",
-            "At bedtime Instagram, YouTube, Facebook, Snapchat, TikTok and apps with a limit close until you wake up.")
-        toggle(c, "Sleep mode", null, { prefs.sleepOn }, { prefs.sleepOn = it; render() })
-        if (!prefs.sleepOn) return
-        ui.buttonRow(c,
-            Triple("Bedtime ${Fmt.clock(prefs.sleepStart)}", Ui.Btn.OUTLINED) { pickSleepTime(true) },
-            Triple("Wake ${Fmt.clock(prefs.sleepEnd)}", Ui.Btn.OUTLINED) { pickSleepTime(false) },
-        )
-        val group = ChipGroup(this)
-        listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun").forEachIndexed { i, n ->
-            val chip = Chip(android.view.ContextThemeWrapper(this, R.style.ThemeOverlay_ScrollStop_FilterChip)).apply {
-                text = n
-                isCheckable = true
-                isChecked = prefs.sleepDays and (1 shl i) != 0
-            }
-            chip.setOnCheckedChangeListener { v, checked ->
-                val days = if (checked) prefs.sleepDays or (1 shl i) else prefs.sleepDays and (1 shl i).inv()
-                val new = Sleep.window(true, prefs.sleepStart, prefs.sleepEnd, days)
-                if (prefs.isLocked() && Sleep.weakens(prefs.sleepWindow(), new)) {
-                    v.isChecked = !checked
-                    showLockedDialog()
-                } else prefs.sleepDays = days
-            }
-            group.addView(chip)
-        }
-        c.addView(group)
-        ui.small(c, "Nights start on the days ticked above.")
-        val reminders = listOf(0, 15, 30, 60)
-        ui.button(c, "Heads-up before bedtime: " +
-            if (prefs.sleepReminder == 0) "off" else "${prefs.sleepReminder} min", Ui.Btn.TEXT) {
-            MaterialAlertDialogBuilder(this)
-                .setTitle("Heads-up before bedtime")
-                .setItems(arrayOf("Off", "15 minutes before", "30 minutes before", "1 hour before")) { _, i ->
-                    prefs.sleepReminder = reminders[i]
-                    render()
-                }
-                .show()
-        }
-    }
-
-    // ---- adult content filter ----
-
-    private fun filterCard() {
-        val c = ui.card(page, "Adult content filter",
-            "Blocks adult and harmful websites in every app and browser, using Cloudflare's free family DNS " +
-                "(1.1.1.3). Works through a VPN that only carries web address lookups: the rest of your " +
-                "internet goes out as normal, and nothing is logged.")
-        toggle(c, "Block adult content", null, { prefs.adultFilter }, { on ->
-            if (on) {
-                val ask = android.net.VpnService.prepare(this)
-                if (ask == null) {
-                    prefs.adultFilter = true
-                    FilterVpnService.start(this)
-                    handler.postDelayed({ render() }, 600)
-                } else {
-                    askVpn.launch(ask)
-                }
-            } else {
-                prefs.adultFilter = false
-                FilterVpnService.stop(this)
-                handler.postDelayed({ render() }, 600)
-            }
-        })
-        if (prefs.adultFilter) {
-            ui.small(c, if (FilterVpnService.running) "🟢 Filter is running."
-            else "🟠 Filter isn't running. Another VPN may have taken over: switch it off and on again.")
-        }
-        ui.small(c, "Only one VPN can run at a time. If sites still load, set Settings → Network → Private DNS to " +
-            "Off or Automatic.").setPadding(0, ui.dp(4), 0, 0)
-    }
-
-    private fun pickSleepTime(bedtime: Boolean) {
+    private fun pickSleepTime(bedtime: Boolean, then: () -> Unit) {
         val cur = if (bedtime) prefs.sleepStart else prefs.sleepEnd
         TimePickerDialog(this, { _, h, min ->
             val v = h * 60 + min
@@ -947,12 +993,82 @@ class MainActivity : AppCompatActivity() {
             if (prefs.isLocked() && Sleep.weakens(old, new)) showLockedDialog()
             else {
                 if (bedtime) prefs.sleepStart = v else prefs.sleepEnd = v
-                render()
+                then()
             }
         }, cur / 60, cur % 60, android.text.format.DateFormat.is24HourFormat(this)).show()
     }
 
-    // ---- focused browser ----
+    private fun messageDialog() {
+        val input = EditText(this).apply {
+            setText(prefs.customMessage)
+            hint = "e.g. You said you'd read tonight."
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or
+                InputType.TYPE_TEXT_FLAG_MULTI_LINE
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Reminder text")
+            .setMessage("Shown when something is blocked. Leave empty for random nudges.")
+            .setView(padded(input))
+            .setPositiveButton("Save") { _, _ ->
+                prefs.customMessage = input.text.toString()
+                render()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun snoozeDialog(then: () -> Unit) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Snooze in Instagram's settings")
+            .setMessage(
+                "Instagram also has its own switch. It lasts 30 days, so ScrollStop reminds you to renew it.\n\n" +
+                    "1. In Instagram, open your profile and tap ☰\n" +
+                    "2. Tap \"Suggested content\"\n" +
+                    "3. Turn on \"Snooze suggested posts in feed\"\n\n" +
+                    "Can't find it? Search \"suggested\" in Instagram's settings."
+            )
+            .setPositiveButton("Done, remind me") { _, _ ->
+                prefs.igSnoozedAt = System.currentTimeMillis()
+                prefs.igSnoozeRemindedAt = 0L
+                then()
+            }
+            .setNeutralButton("Open Instagram") { _, _ ->
+                val launch = packageManager.getLaunchIntentForPackage("com.instagram.android")
+                if (launch == null || !open(launch)) toast("Instagram isn't installed")
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showEnableDialog() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Turn on ScrollStop")
+            .setMessage(
+                "1. Tap \"Open settings\"\n" +
+                    "2. Find ScrollStop under Installed / Downloaded apps\n" +
+                    "3. Switch it on and allow\n\n" +
+                    "Greyed out? (Android 13+) Open App info → ⋮ → \"Allow restricted settings\", then try again.\n\n" +
+                    "ScrollStop only looks for Reels, Shorts, ads and suggested posts. It never stores or sends " +
+                    "what's on your screen."
+            )
+            .setPositiveButton("Open settings") { _, _ -> open(ServiceState.accessibilitySettings()) }
+            .setNeutralButton("App info") { _, _ -> open(ServiceState.appInfo(this)) }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun confirm(title: String, msg: String, onOk: () -> Unit) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(title)
+            .setMessage(msg)
+            .setPositiveButton("Turn on") { _, _ -> onOk() }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    // =====================================================================
+    // Feed-free apps and shortcuts
+    // =====================================================================
 
     private fun openWeb(site: WebSite) {
         if (prefs.isSleeping()) {
@@ -980,8 +1096,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun openByDefaultSettings() {
         val i = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            Intent(android.provider.Settings.ACTION_APP_OPEN_BY_DEFAULT_SETTINGS,
-                android.net.Uri.parse("package:$packageName"))
+            Intent(android.provider.Settings.ACTION_APP_OPEN_BY_DEFAULT_SETTINGS, Uri.parse("package:$packageName"))
         } else ServiceState.appInfo(this)
         if (!open(i)) open(ServiceState.appInfo(this))
     }
@@ -1001,111 +1116,35 @@ class MainActivity : AppCompatActivity() {
             .build()
     }
 
-    /** Long-press ScrollStop's icon to jump straight into Instagram or YouTube without the feeds. */
+    /** Long-press ScrollStop's icon to jump straight into the feed-free apps. */
     private fun publishShortcuts() {
         runCatching {
             ShortcutManagerCompat.setDynamicShortcuts(this, WebSite.entries.take(4).map { shortcut(it) })
         }
     }
 
-    // ---- schedule ----
-
-    private fun scheduleCard() {
-        val s = prefs.schedule
-        val c = ui.card(page, "Blocking hours")
-        toggle(c, "Only block at certain times", "Outside these hours everything is allowed.",
-            { prefs.schedule.enabled },
-            { prefs.schedule = prefs.schedule.copy(enabled = it); render() },
-            weakensWhen = true)
-        if (!s.enabled) return
-        ui.buttonRow(c,
-            Triple("From ${Fmt.clock(s.startMin)}", Ui.Btn.OUTLINED) { pickTime(true) },
-            Triple("To ${Fmt.clock(s.endMin)}", Ui.Btn.OUTLINED) { pickTime(false) },
-        )
-        val group = ChipGroup(this)
-        val names = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
-        names.forEachIndexed { i, n ->
-            val chip = Chip(android.view.ContextThemeWrapper(this, R.style.ThemeOverlay_ScrollStop_FilterChip)).apply {
-                text = n
-                isCheckable = true
-                isChecked = s.dayOn(i + 1)
-            }
-            chip.setOnCheckedChangeListener { v, checked ->
-                val cur = prefs.schedule
-                val next = cur.copy(days = if (checked) cur.days or (1 shl i) else cur.days and (1 shl i).inv())
-                if (prefs.isLocked() && next.weakerThan(cur)) {
-                    v.isChecked = !checked
-                    showLockedDialog()
-                } else prefs.schedule = next
-            }
-            group.addView(chip)
-        }
-        c.addView(group)
-        ui.small(c, "If the end is earlier than the start, the hours run overnight.")
-    }
-
-    private fun pickTime(start: Boolean) {
-        val cur = prefs.schedule
-        val m = if (start) cur.startMin else cur.endMin
-        TimePickerDialog(this, { _, h, min ->
-            val v = h * 60 + min
-            val next = if (start) cur.copy(startMin = v) else cur.copy(endMin = v)
-            if (prefs.isLocked() && next.weakerThan(cur)) showLockedDialog()
-            else {
-                prefs.schedule = next
-                render()
-            }
-        }, m / 60, m % 60, android.text.format.DateFormat.is24HourFormat(this)).show()
-    }
-
-    private fun messageDialog() {
-        val input = EditText(this).apply {
-            setText(prefs.customMessage)
-            hint = "e.g. You said you'd read tonight."
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or
-                InputType.TYPE_TEXT_FLAG_MULTI_LINE
-        }
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Your reminder")
-            .setMessage("Shown on the block screen. Leave empty for random nudges.")
-            .setView(padded(input))
-            .setPositiveButton("Save") { _, _ ->
-                prefs.customMessage = input.text.toString()
-                render()
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
-    }
-
     // =====================================================================
     // helpers
     // =====================================================================
 
-    private fun showEnableDialog() {
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Turn on ScrollStop")
-            .setMessage(
-                "1. Tap \"Open settings\"\n" +
-                    "2. Find ScrollStop under Installed / Downloaded apps\n" +
-                    "3. Switch it on and allow\n\n" +
-                    "Greyed out? (Android 13+) Open App info → ⋮ menu (top right) → \"Allow restricted settings\", " +
-                    "then try again.\n\n" +
-                    "ScrollStop only looks for Reels, Shorts and Spotlight screens. It never stores or sends what's on " +
-                    "your screen."
-            )
-            .setPositiveButton("Open settings") { _, _ -> open(ServiceState.accessibilitySettings()) }
-            .setNeutralButton("App info") { _, _ -> open(ServiceState.appInfo(this)) }
-            .setNegativeButton("Cancel", null)
-            .show()
+    private val brandColors = mapOf(
+        "instagram" to 0xFFC13584.toInt(), "youtube" to 0xFFE53935.toInt(), "facebook" to 0xFF1877F2.toInt(),
+        "x" to 0xFF222222.toInt(), "reddit" to 0xFFFF4500.toInt(), "linkedin" to 0xFF0A66C2.toInt(),
+        "snap" to 0xFFFFC400.toInt(), "ig" to 0xFFC13584.toInt(), "yt" to 0xFFE53935.toInt(), "fb" to 0xFF1877F2.toInt(),
+    )
+
+    private fun platformIcon(p: Platform): View {
+        val installed = p.packages.firstOrNull { ServiceState.isInstalled(this, it) }
+        return ui.icon(installed?.let { appIcon(it) }, p.app.take(1), brandColors[p.key] ?: ui.primaryColor())
     }
 
-    private fun confirm(title: String, msg: String, onOk: () -> Unit) {
-        MaterialAlertDialogBuilder(this)
-            .setTitle(title)
-            .setMessage(msg)
-            .setPositiveButton("Turn on") { _, _ -> onOk() }
-            .setNegativeButton("Cancel", null)
-            .show()
+    private fun siteIcon(site: WebSite, size: Int): View {
+        val d = if (ServiceState.isInstalled(this, site.pkg)) appIcon(site.pkg) else null
+        return ui.icon(d, site.title.take(1), brandColors[site.key] ?: ui.primaryColor(), size)
+    }
+
+    private fun setTop(v: View, dp: Int) {
+        (v.layoutParams as? ViewGroup.MarginLayoutParams)?.topMargin = ui.dp(dp)
     }
 
     private fun pinInput(hint: String) = EditText(this).apply {

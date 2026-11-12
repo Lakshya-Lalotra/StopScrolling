@@ -50,6 +50,18 @@ class UiSmokeTest {
                 val page = activity.findViewById<LinearLayout>(R.id.page)
                 assertTrue("$name is empty", page.childCount > 2)
                 save(fullPage(activity.findViewById(R.id.root), page), "${mode}_$name")
+                if (name == "block") {
+                    // tap Instagram: its settings sheet opens
+                    (findButton(page, "Instagram")!!.parent as View).performClick()
+                    shadowOf(Looper.getMainLooper()).idle()
+                    val sheet = org.robolectric.shadows.ShadowDialog.getLatestDialog()
+                    assertTrue(sheet != null && sheet.isShowing)
+                    val content = sheet.findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)
+                    save(render(content, activity.window.decorView.width, 0,
+                        MaterialColors.getColor(content, android.R.attr.colorBackground)), "${mode}_ig_sheet")
+                    sheet.dismiss()
+                    shadowOf(Looper.getMainLooper()).idle()
+                }
             }
             // Instagram / YouTube inside ScrollStop open without crashing
             for (site in WebSite.entries) {

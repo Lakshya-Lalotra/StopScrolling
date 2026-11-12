@@ -324,19 +324,24 @@ class WebAppActivity : AppCompatActivity() {
                 sw("Block Explore & post search", "Searching for people still works.",
                     { prefs.blockIgExplore }, { prefs.blockIgExplore = it })
                 sw("Messages only", "Hides the home feed.", { prefs.webIgMessagesOnly }, { prefs.webIgMessagesOnly = it })
-                val names = linkedMapOf("following" to "Following", "favorites" to "Favorites", "home" to "Home (mixed)")
-                ui.buttonRow(box, *names.map { (k, label) ->
-                    Triple((if (prefs.webIgFeed == k) "✓ " else "") + label,
-                        if (prefs.webIgFeed == k) Ui.Btn.FILLED else Ui.Btn.OUTLINED) {
-                        if (k == "home" && prefs.webIgFeed != "home" && prefs.isLocked()) {
-                            Toast.makeText(this, "Strict mode is on: blocking can't be loosened", Toast.LENGTH_SHORT).show()
-                        } else {
-                            prefs.webIgFeed = k
-                            changed = true
+                val names = linkedMapOf("following" to "Following", "favorites" to "Favorites", "home" to "Home")
+                ui.navRow(box, "Feed", names[prefs.webIgFeed]) {
+                    val keys = names.keys.toList()
+                    MaterialAlertDialogBuilder(this)
+                        .setTitle("Instagram feed")
+                        .setSingleChoiceItems(arrayOf("Following: people you follow, newest first", "Favorites only",
+                            "Home: Instagram's mix"), keys.indexOf(prefs.webIgFeed)) { d, i ->
+                            if (keys[i] == "home" && prefs.webIgFeed != "home" && prefs.isLocked()) {
+                                Toast.makeText(this, "Strict mode is on: blocking can't be loosened", Toast.LENGTH_SHORT).show()
+                            } else if (keys[i] != prefs.webIgFeed) {
+                                prefs.webIgFeed = keys[i]
+                                changed = true
+                            }
+                            d.dismiss()
                             sheet.dismiss()
                         }
-                    }
-                }.toTypedArray())
+                        .show()
+                }
             }
             WebSite.YOUTUBE -> {
                 sw("Block Shorts", null, { prefs.blocked(Platform.YOUTUBE) }, { prefs.setBlocked(Platform.YOUTUBE, it) })
