@@ -1,0 +1,16 @@
+<resources>
+    <color name="brand">#FF5B4BDB</color>
+    <color name="primary">#FF5B4BDB</color>
+    <color name="on_primary">#FFFFFFFF</color>
+    <color name="primary_container">#FFE6E1FF</color>
+    <color name="on_primary_container">#FF1B0F6B</color>
+    <color name="brand_dark">#FF3F31B8</color>
+    <color name="accent">#FFFF6B6B</color>
+    <color name="good">#FF2E9E5B</color>
+    <color name="warn">#FFE08A00</color>
+    <color name="bad">#FFD64545</color>
+    <color name="block_bg">#F2121022</color>
+    <color name="hide_bg">#FFFFFFFF</color>
+    <color name="hide_fg">#FF8A8A99</color>
+    <color name="icon_bg">#FF5B4BDB</color>
+</resources>

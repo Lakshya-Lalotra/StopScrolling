@@ -1,0 +1,8 @@
+<resources>
+    <color name="primary">#FFB3A8FF</color>
+    <color name="on_primary">#FF22137A</color>
+    <color name="primary_container">#FF3B2EA6</color>
+    <color name="on_primary_container">#FFE6E1FF</color>
+    <color name="hide_bg">#FF000000</color>
+    <color name="hide_fg">#FF77778A</color>
+</resources>

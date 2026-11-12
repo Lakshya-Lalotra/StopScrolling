@@ -1,0 +1,26 @@
+<resources>
+    <style name="Theme.ScrollStop" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/primary</item>
+        <item name="colorOnPrimary">@color/on_primary</item>
+        <item name="colorPrimaryContainer">@color/primary_container</item>
+        <item name="colorOnPrimaryContainer">@color/on_primary_container</item>
+        <item name="colorSecondaryContainer">@color/primary_container</item>
+        <item name="colorOnSecondaryContainer">@color/on_primary_container</item>
+        <item name="colorSecondary">@color/accent</item>
+        <item name="colorTertiary">@color/good</item>
+    </style>
+
+    <!-- Used to create tonal / outlined / text buttons and filter chips from code. -->
+    <style name="ThemeOverlay.ScrollStop.TonalButton" parent="">
+        <item name="materialButtonStyle">@style/Widget.Material3.Button.TonalButton</item>
+    </style>
+    <style name="ThemeOverlay.ScrollStop.OutlinedButton" parent="">
+        <item name="materialButtonStyle">@style/Widget.Material3.Button.OutlinedButton</item>
+    </style>
+    <style name="ThemeOverlay.ScrollStop.TextButton" parent="">
+        <item name="materialButtonStyle">@style/Widget.Material3.Button.TextButton</item>
+    </style>
+    <style name="ThemeOverlay.ScrollStop.FilterChip" parent="">
+        <item name="chipStyle">@style/Widget.Material3.Chip.Filter</item>
+    </style>
+</resources>
