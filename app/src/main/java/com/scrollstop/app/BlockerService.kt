@@ -80,6 +80,7 @@ class BlockerService : AccessibilityService() {
     private var lastTickAt = 0L
     private var lastFlushAt = 0L
     private var lastMinuteAt = 0L
+    private var lastRedirectAt = 0L
     private var sleepRemindedDay = ""
     private val warned = HashSet<String>()
     private var lastToast: Toast? = null
@@ -242,6 +243,10 @@ class BlockerService : AccessibilityService() {
             return
         }
         val a = Rules.analyze(platform, pkg, root, prefs, screen)
+        if (platform == Platform.INSTAGRAM && prefs.igUseScrollStop) {
+            openScrollStopInstagram(if (a.dmThread) "https://www.instagram.com/direct/inbox/" else null)
+            return
+        }
         hides.show(pkg, if (blockScreen.isShowing || imeVisible()) emptyList() else colorize(pkg, a))
         if (a.dmThread) lastDmSeenAt = SystemClock.elapsedRealtime()
 
@@ -278,6 +283,26 @@ class BlockerService : AccessibilityService() {
         }
         if (missing.isNotEmpty()) sampler.sample(pkg, missing)
         return out
+    }
+
+    /**
+     * Swaps the Instagram app for ScrollStop's Instagram, where ads, suggested posts and Reels are
+     * removed completely (the app's own feed can only be covered, never edited).
+     */
+    private fun openScrollStopInstagram(url: String?) {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastRedirectAt < 3_000) return
+        lastRedirectAt = now
+        hides.clear()
+        endWatching()
+        // Send the app to the background first, so leaving ScrollStop's version doesn't land back in it.
+        performGlobalAction(GLOBAL_ACTION_HOME)
+        h.postDelayed({
+            if (instance == null) return@postDelayed
+            runCatching {
+                startActivity(WebAppActivity.intent(this, WebSite.INSTAGRAM, url).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
+        }, 250)
     }
 
     private fun onAppChanged(pkg: String) {

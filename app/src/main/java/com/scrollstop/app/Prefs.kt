@@ -46,6 +46,8 @@ class Prefs private constructor(context: Context) {
         .apply()
 
     var allowInstagramDm: Boolean get() = bool("ig_dm", false); set(v) = setBool("ig_dm", v)
+    /** Opening the Instagram app takes you to ScrollStop's Instagram (no ads, suggestions or Reels). */
+    var igUseScrollStop: Boolean get() = bool("ig_redirect", false); set(v) = setBool("ig_redirect", v)
     var blockIgExplore: Boolean get() = bool("ig_explore", false); set(v) = setBool("ig_explore", v)
     var blockIgStories: Boolean get() = bool("ig_stories", false); set(v) = setBool("ig_stories", v)
     var blockYtHome: Boolean get() = bool("yt_home", false); set(v) = setBool("yt_home", v)

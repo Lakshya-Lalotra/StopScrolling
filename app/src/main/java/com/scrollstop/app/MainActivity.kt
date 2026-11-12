@@ -314,9 +314,10 @@ class MainActivity : AppCompatActivity() {
             { prefs.webBlockDiscover }, { prefs.webBlockDiscover = it })
         toggle(inApp, "Hide reels in the feed", "Reel posts are removed from your Instagram home feed.",
             { prefs.webHideFeedReels }, { prefs.webHideFeedReels = it })
-        toggle(inApp, "Hide suggested posts", "Only posts from people you follow.",
+        toggle(inApp, "Hide suggested posts", "Removes posts from accounts you don't follow, \"Suggested for " +
+            "you\" rows and everything after \"You're all caught up\". Only people you follow are left.",
             { prefs.webHideSuggested }, { prefs.webHideSuggested = it })
-        toggle(inApp, "Hide ads", "Sponsored posts and promoted videos.",
+        toggle(inApp, "Hide ads", "Sponsored posts, paid partnerships and promoted videos, in any language.",
             { prefs.webHideAds }, { prefs.webHideAds = it })
         toggle(inApp, "Instagram: messages only", "Hides the home feed too. Messages, search and profiles still work.",
             { prefs.webIgMessagesOnly }, { prefs.webIgMessagesOnly = it })
@@ -343,6 +344,10 @@ class MainActivity : AppCompatActivity() {
 
         when (p) {
             Platform.INSTAGRAM -> {
+                toggle(c, "Use ScrollStop's Instagram instead",
+                    "Opening the Instagram app takes you to ScrollStop's version, where ads, suggested posts and " +
+                        "Reels are removed completely. Messages open your inbox. Take a break to use the real app.",
+                    { prefs.igUseScrollStop }, { prefs.igUseScrollStop = it })
                 toggle(c, "Allow reels sent in DMs",
                     "Watch a reel a friend sent you. Swiping on to more reels is still blocked.",
                     { prefs.allowInstagramDm }, { prefs.allowInstagramDm = it }, weakensWhen = true, enabled = on)

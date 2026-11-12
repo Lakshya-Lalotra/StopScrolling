@@ -51,12 +51,15 @@ class WebAppActivity : AppCompatActivity() {
 
     companion object {
         const val EXTRA_SITE = "site"
+        const val EXTRA_URL = "url"
 
-        fun intent(ctx: Context, site: WebSite): Intent =
+        /** [startUrl] opens a page other than the site's home, e.g. Instagram messages. */
+        fun intent(ctx: Context, site: WebSite, startUrl: String? = null): Intent =
             Intent(ctx, WebAppActivity::class.java)
                 .setAction(Intent.ACTION_VIEW)
                 .setData(Uri.parse("scrollstop://${site.key}"))
                 .putExtra(EXTRA_SITE, site.key)
+                .apply { if (startUrl != null) putExtra(EXTRA_URL, startUrl) }
     }
 
     private lateinit var site: WebSite
@@ -118,7 +121,8 @@ class WebAppActivity : AppCompatActivity() {
         setupWeb()
         if (savedInstanceState != null) web.restoreState(savedInstanceState)
         if (web.url == null) {
-            val start = incoming?.takeIf { fromLink != null } ?: site.home
+            val asked = intent.getStringExtra(EXTRA_URL)?.takeIf { WebSite.forUrl(it) == site }
+            val start = incoming?.takeIf { fromLink != null } ?: asked ?: site.home
             web.loadUrl(WebRules.feedRedirect(site, start, prefs.webIgFeed) ?: start)
         }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
