@@ -45,6 +45,17 @@ settings and stats. (Version 1 builds from GitHub Actions were signed with a ran
 ScrollStop once** before installing this version.) If your repository is public and you'd rather use a private key, set the
 `SCROLLSTOP_KEYSTORE`, `SCROLLSTOP_PASSWORD` and `SCROLLSTOP_ALIAS` environment variables (or GitHub secrets) when building.
 
+## If Play Protect says "App blocked to protect your device"
+In some countries (India included) Google Play Protect blocks any app installed from a browser, chat app or file manager
+if it uses an accessibility service. ScrollStop needs one to see Reels and Shorts, so it gets caught. It's your own app, so
+either:
+- **On the phone:** Play Store → your profile picture → **Play Protect** → ⚙ (top right) → turn off
+  **Scan apps with Play Protect**. Install the APK, then turn the setting back on. If Play Protect later asks about
+  ScrollStop, choose to keep it.
+- **From a computer:** turn on USB debugging (Settings → About phone → tap Build number 7 times → Developer options →
+  USB debugging), connect the phone and run `adb install app-release.apk` (or press Run in Android Studio). Installs over
+  USB aren't covered by this block.
+
 ## First-time setup on the phone
 1. Install the APK (allow "Install unknown apps" for your browser/file manager if asked).
 2. Open ScrollStop → **Turn on blocker** → Accessibility → ScrollStop → On.
