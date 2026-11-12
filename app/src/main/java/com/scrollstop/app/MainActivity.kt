@@ -348,6 +348,27 @@ class MainActivity : AppCompatActivity() {
                     "Opening the Instagram app takes you to ScrollStop's version, where ads, suggested posts and " +
                         "Reels are removed completely. Messages open your inbox. Take a break to use the real app.",
                     { prefs.igUseScrollStop }, { prefs.igUseScrollStop = it })
+                val snoozeText = when {
+                    prefs.igSnoozedAt == 0L -> "Instagram's own setting turns them off for 30 days. ScrollStop shows " +
+                        "you where it is and reminds you to renew it."
+                    prefs.igSnoozeDue() -> "⚠️ Your 30 days are up: Instagram has turned them back on. Snooze them again."
+                    else -> "✅ Snoozed. Renew on " + SimpleDateFormat("d MMM", Locale.getDefault())
+                        .format(Date(prefs.igSnoozedAt + Prefs.SNOOZE_DAYS * Prefs.DAY_MS)) + " (you'll get a reminder)."
+                }
+                val snoozeRow = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    minimumHeight = ui.dp(52)
+                }
+                val snoozeTexts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                ui.text(snoozeTexts, "Suggested posts in the Instagram app",
+                    com.google.android.material.R.style.TextAppearance_Material3_BodyLarge)
+                ui.text(snoozeTexts, snoozeText, com.google.android.material.R.style.TextAppearance_Material3_BodySmall,
+                    muted = true)
+                snoozeRow.addView(snoozeTexts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    .apply { marginEnd = ui.dp(8) })
+                ui.button(snoozeRow, "Turn off", Ui.Btn.TONAL) { snoozeDialog() }
+                c.addView(snoozeRow)
                 toggle(c, "Allow reels sent in DMs",
                     "Watch a reel a friend sent you. Swiping on to more reels is still blocked.",
                     { prefs.allowInstagramDm }, { prefs.allowInstagramDm = it }, weakensWhen = true, enabled = on)
@@ -811,6 +832,35 @@ class MainActivity : AppCompatActivity() {
             b.setNeutralButton("Unlock") { _, _ -> unlockDialog() }
         }
         b.show()
+    }
+
+    // ---- Instagram app: snooze suggested posts ----
+
+    private fun snoozeDialog() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Turn off suggested posts in Instagram")
+            .setMessage(
+                "Instagram has its own switch for this. It lasts 30 days, then Instagram turns it back on, " +
+                    "so ScrollStop will remind you.\n\n" +
+                    "1. In Instagram, go to your profile and tap ☰ (top right)\n" +
+                    "2. Under \"What you see\", tap \"Suggested content\"\n" +
+                    "3. Turn on \"Snooze suggested posts in feed\"\n\n" +
+                    "Can't find it? Type \"suggested\" in the search bar at the top of Instagram's settings.\n\n" +
+                    "Ads can't be switched off in the Instagram app. For no ads and no suggestions at all, use " +
+                    "ScrollStop's Instagram."
+            )
+            .setPositiveButton("I've snoozed them") { _, _ ->
+                prefs.igSnoozedAt = System.currentTimeMillis()
+                prefs.igSnoozeRemindedAt = 0L
+                toast("ScrollStop will remind you in 30 days")
+                render()
+            }
+            .setNeutralButton("Open Instagram") { _, _ ->
+                val launch = packageManager.getLaunchIntentForPackage("com.instagram.android")
+                if (launch == null || !open(launch)) toast("Instagram isn't installed")
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     // ---- sleep mode ----

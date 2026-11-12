@@ -60,16 +60,38 @@ class HideOverlays(private val svc: AccessibilityService) {
         hides.forEachIndexed { i, h ->
             if (i < views.size) {
                 val (v, old) = views[i]
-                if (old != h) {
+                if (old != h || v.visibility != View.VISIBLE) {
                     style(v, h)
-                    if (old.rect != h.rect) runCatching { wm.updateViewLayout(v, params(h.rect)) }
+                    v.visibility = View.VISIBLE
+                    if (old.rect != h.rect || old.scrolls != h.scrolls) runCatching { wm.updateViewLayout(v, params(h)) }
                     views[i] = v to h.copy(rect = Rect(h.rect))
                 }
             } else {
                 val v = TextView(ctx)
                 style(v, h)
-                if (runCatching { wm.addView(v, params(h.rect)) }.isSuccess) views += v to h.copy(rect = Rect(h.rect))
+                if (runCatching { wm.addView(v, params(h)) }.isSuccess) views += v to h.copy(rect = Rect(h.rect))
             }
+        }
+    }
+
+    /**
+     * Moves the feed covers along with a scroll straight away, so they stay on their post until the
+     * next proper look at the screen (a fraction of a second later).
+     */
+    fun shift(dy: Int) {
+        if (dy == 0) return
+        for (i in views.indices) {
+            val (v, h) = views[i]
+            if (!h.scrolls) continue
+            val moved = Rect(h.rect).apply { offset(0, -dy) }
+            val shown = Rect(moved)
+            if (h.clip != null && !shown.intersect(h.clip)) {
+                v.visibility = View.INVISIBLE
+            } else {
+                v.visibility = View.VISIBLE
+                runCatching { wm.updateViewLayout(v, params(h.copy(rect = shown))) }
+            }
+            views[i] = v to h.copy(rect = moved)
         }
     }
 
@@ -89,14 +111,24 @@ class HideOverlays(private val svc: AccessibilityService) {
         v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
         v.setPadding(48, 48, 48, 48)
         v.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        v.setOnTouchListener { _, _ -> true } // swallow taps on the covered button
+        if (h.scrolls) {
+            v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            v.gravity = Gravity.CENTER_HORIZONTAL or Gravity.TOP
+            v.alpha = 1f
+            v.setOnTouchListener(null)
+        } else {
+            v.setOnTouchListener { _, _ -> true } // swallow taps on the covered button
+        }
     }
 
-    private fun params(r: Rect) = overlayParams().apply {
+    private fun params(h: Hide) = overlayParams().apply {
+        val r = h.rect
         x = r.left
         y = r.top
         width = r.width().coerceAtLeast(1)
         height = r.height().coerceAtLeast(1)
+        // Feed covers let touches through, so you can scroll past the hidden post as usual.
+        if (h.scrolls) flags = flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
     }
 
     private fun remove(v: View) {
@@ -129,6 +161,12 @@ class ColorSampler(private val svc: AccessibilityService, private val onSampled:
 
     /** Stops retrying a button after a few tries, so its cover falls back to the default colour. */
     fun worthTrying(pkg: String, r: Rect): Boolean = canSample && (attempts[key(pkg, r)] ?: 0) < 3
+
+    /** A colour measured on something this wide in this app (feed posts all share one header size). */
+    fun colorForWidth(pkg: String, width: Int): Int? {
+        val prefix = "$pkg|${night()}|${width}x"
+        return cache.entries.firstOrNull { it.key.startsWith(prefix) }?.value
+    }
 
     /** Any colour already measured in this app (used for the bigger Explore / Home-feed covers). */
     fun appColor(pkg: String): Int? {

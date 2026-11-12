@@ -166,6 +166,61 @@ class RulesTest {
         assertTrue(a.hides.isEmpty())
     }
 
+    /** A post in Instagram's feed list: header row (name + optional label/Follow), photo row, buttons row. */
+    private fun igPost(y: Int, name: String, label: String? = null, follow: Boolean = false): List<AccessibilityNodeInfo> {
+        val headerKids = mutableListOf(node(ig, id = "row_feed_photo_profile_name", text = name, bounds = Rect(140, y + 10, 600, y + 50)))
+        label?.let { headerKids += node(ig, id = "secondary_label", text = it, bounds = Rect(140, y + 50, 600, y + 80)) }
+        if (follow) headerKids += node(ig, text = "Follow", bounds = Rect(620, y + 20, 760, y + 70)).also { it.isClickable = true }
+        return listOf(
+            node(ig, id = "row_feed_profile_header", bounds = Rect(0, y, 1080, y + 100), children = headerKids.toTypedArray()),
+            node(ig, id = "row_feed_media", bounds = Rect(0, y + 100, 1080, y + 1180)),
+            node(ig, id = "row_feed_view_group_buttons", bounds = Rect(0, y + 1180, 1080, y + 1300)),
+        )
+    }
+
+    private fun feedScreen(rows: List<AccessibilityNodeInfo>, homeSelected: Boolean = true): AccessibilityNodeInfo {
+        val list = AccessibilityNodeInfo.obtain().apply {
+            packageName = ig
+            className = "androidx.recyclerview.widget.RecyclerView"
+            viewIdResourceName = "android:id/list"
+            setBoundsInScreen(Rect(0, 200, 1080, 2250))
+            isVisibleToUser = true
+            isScrollable = true
+        }
+        rows.forEach { shadowOf(list).addChild(it) }
+        val homeTab = node(ig, id = "feed_tab", bounds = Rect(0, 2250, 216, 2380), selected = homeSelected)
+        return node(ig, bounds = screen, children = arrayOf(list, homeTab))
+    }
+
+    @Test fun instagramAppFeedAdsAndSuggestedPosts() {
+        val rows = igPost(200, "alice") + igPost(1500, "brandco", label = "Sponsored")
+        val a = Rules.analyze(Platform.INSTAGRAM, ig, feedScreen(rows), prefs, screen)
+        val cover = a.hides.single { it.scrolls }
+        assertEquals(Rect(0, 1500, 1080, 2250), cover.rect)
+        assertEquals("Ad hidden", cover.text)
+        assertEquals(Rect(0, 1500, 1080, 1600), cover.sample) // colour comes from the ad's header row
+        assertEquals(Rect(0, 200, 1080, 2250), a.feedList)
+
+        // A post with a Follow button is from someone you don't follow.
+        val b = Rules.analyze(Platform.INSTAGRAM, ig, feedScreen(igPost(200, "stranger", follow = true) + igPost(1500, "bob")),
+            prefs, screen)
+        val s = b.hides.single { it.scrolls }
+        assertEquals("Suggested post hidden", s.text)
+        assertEquals(Rect(0, 200, 1080, 1500), s.rect)
+        assertEquals(1300, b.feedSkip) // it's at the top and fills the screen: skip to bob
+
+        // Switched off: nothing is covered.
+        prefs.webHideAds = false
+        prefs.webHideSuggested = false
+        assertTrue(Rules.analyze(Platform.INSTAGRAM, ig, feedScreen(rows), prefs, screen).hides.none { it.scrolls })
+    }
+
+    @Test fun instagramFeedLeftAloneOnOtherTabs() {
+        val rows = igPost(200, "brandco", label = "Sponsored")
+        val root = feedScreen(rows, homeSelected = false) // e.g. the profile tab is open
+        assertTrue(Rules.analyze(Platform.INSTAGRAM, ig, root, prefs, screen).hides.none { it.scrolls })
+    }
+
     @Test fun strictModeProtectsTheRightScreens() {
         val s = "com.android.settings"
         // ScrollStop's accessibility page

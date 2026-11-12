@@ -103,6 +103,9 @@ class UrlRulesTest {
         assertEquals("Instagram Reels", UrlRules.match("https://www.instagram.com/reel/abc/", c))
         assertEquals("Instagram Reels", UrlRules.match("instagram.com/someone/reels", c))
         assertEquals("Instagram Explore", UrlRules.match("instagram.com/explore/", c))
+        assertEquals("Instagram Explore", UrlRules.match("instagram.com/explore/tags/cats/", c))
+        assertEquals("Instagram Explore", UrlRules.match("instagram.com/explore/search/keyword/?q=cats", c))
+        assertNull(UrlRules.match("instagram.com/explore/search/", c)) // looking up people is fine
         assertEquals("Instagram Stories", UrlRules.match("instagram.com/stories/someone/123", c))
         assertNull(UrlRules.match("instagram.com/reelfan", c)) // a username, not reels
         assertNull(UrlRules.match("instagram.com/p/xyz", c))

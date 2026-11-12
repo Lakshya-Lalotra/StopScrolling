@@ -4,10 +4,19 @@ import android.graphics.Rect
 import android.view.accessibility.AccessibilityNodeInfo
 
 /**
- * Something to cover with an overlay, e.g. the Reels tab button or the Explore grid.
+ * Something to cover with an overlay, e.g. the Reels tab button, the Explore grid or an ad in the feed.
  * [color] is the cover's colour (null = default for light/dark mode, transparent while it's being measured).
+ * [scrolls] covers move with the feed and let touches through (so you can scroll past them);
+ * they never go outside [clip]. [sample] is where the background colour can be read.
  */
-data class Hide(val rect: Rect, val text: String? = null, val color: Int? = null)
+data class Hide(
+    val rect: Rect,
+    val text: String? = null,
+    val color: Int? = null,
+    val scrolls: Boolean = false,
+    val clip: Rect? = null,
+    val sample: Rect? = null,
+)
 
 /** What ScrollStop found on the current screen of a supported app. */
 data class Analysis(
@@ -19,6 +28,9 @@ data class Analysis(
     val hides: List<Hide> = emptyList(),
     /** An Instagram direct-message thread is on screen. */
     val dmThread: Boolean = false,
+    /** Instagram feed: scroll down this far to get past a hidden post, and where the feed list is. */
+    val feedSkip: Int? = null,
+    val feedList: Rect? = null,
 )
 
 /**
@@ -82,15 +94,22 @@ object Rules {
         return id in IG_REEL_PAGER_IDS || id in YT_SHORTS_PAGER_IDS
     }
 
-    fun analyze(p: Platform, pkg: String, root: AccessibilityNodeInfo, prefs: Prefs, screen: Rect): Analysis =
+    fun analyze(
+        p: Platform,
+        pkg: String,
+        root: AccessibilityNodeInfo,
+        prefs: Prefs,
+        screen: Rect,
+        feed: FeedMemory = FeedMemory(),
+    ): Analysis =
         when (p) {
-            Platform.INSTAGRAM -> instagram(pkg, root, prefs, screen)
+            Platform.INSTAGRAM -> instagram(pkg, root, prefs, screen, feed)
             Platform.YOUTUBE -> youtube(pkg, root, prefs, screen)
             Platform.FACEBOOK -> facebook(root, prefs, screen)
             Platform.SNAPCHAT -> snapchat(root, prefs, screen)
         }
 
-    private fun instagram(pkg: String, root: AccessibilityNodeInfo, prefs: Prefs, screen: Rect): Analysis {
+    private fun instagram(pkg: String, root: AccessibilityNodeInfo, prefs: Prefs, screen: Rect, feed: FeedMemory): Analysis {
         val blocking = prefs.blocked(Platform.INSTAGRAM)
         val hides = ArrayList<Hide>()
 
@@ -120,12 +139,97 @@ object Rules {
             }
         }
 
+        // Ads and suggested posts in the home feed: covered and skipped.
+        var skip: Int? = null
+        var listRect: Rect? = null
+        if (!reels && (prefs.webHideAds || prefs.webHideSuggested)) {
+            val list = igFeedList(root, pkg, screen)
+            if (list != null) {
+                val lr = bounds(list)
+                val rows = (0 until list.childCount).mapNotNull { i ->
+                    try {
+                        list.getChild(i)?.takeIf { it.isVisibleToUser }?.let { igRow(it) }
+                    } catch (e: RuntimeException) {
+                        null
+                    }
+                }
+                // Only trust lists that look like the feed (they have post headers).
+                if (rows.any { it.header != null } || visible(root, pkg, "feed_tab").any { it.isSelected }) {
+                    val plan = FeedPlan.plan(rows, lr.top, lr.bottom, feed, prefs.webHideAds, prefs.webHideSuggested)
+                    for (c in plan.covers) {
+                        hides += Hide(
+                            Rect(lr.left, c.top, lr.right, c.bottom), c.kind.label, scrolls = true, clip = Rect(lr),
+                            sample = if (c.headerTop != null && c.headerBottom != null)
+                                Rect(lr.left, c.headerTop, lr.right, c.headerBottom) else null,
+                        )
+                    }
+                    skip = plan.skipBy
+                    listRect = lr
+                }
+            }
+        }
+
         return Analysis(
             shortVideo = reels,
             closeNow = close,
             hides = hides,
             dmThread = anyVisibleId(root, pkg, IG_DM_IDS),
+            feedSkip = skip,
+            feedList = listRect,
         )
+    }
+
+    private val IG_HEADER_IDS = setOf(
+        "row_feed_photo_profile_name", "row_feed_profile_header", "row_feed_photo_profile_imageview",
+        "row_feed_photo_profile_metalabel",
+    )
+    private val IG_NAME_IDS = setOf("row_feed_photo_profile_name")
+    private val PROFILE_PIC = Regex("(?i).*profile (picture|photo).*")
+    private val MORE_BUTTON = Regex("(?i)^(more( options| actions.*)?|options)$")
+
+    /** The home feed list, or null when another tab or screen is open. */
+    private fun igFeedList(root: AccessibilityNodeInfo, pkg: String, screen: Rect): AccessibilityNodeInfo? {
+        val home = visible(root, pkg, "feed_tab")
+        if (home.isNotEmpty() && home.none { it.isSelected }) return null
+        val tall = { n: AccessibilityNodeInfo -> n.isVisibleToUser && bounds(n).height() > screen.height() / 2 }
+        val byId = try {
+            findById(root, "android:id/list").filter(tall)
+        } catch (e: RuntimeException) {
+            emptyList()
+        }
+        byId.maxByOrNull { bounds(it).height() }?.let { return it }
+        return findAll(root, 600) { n ->
+            tall(n) && n.isScrollable && n.className?.toString()?.contains("RecyclerView") == true
+        }.maxByOrNull { bounds(it).height() }
+    }
+
+    /** Reads one row of the feed: is it a post header, does it say Sponsored or Suggested, is there a Follow button. */
+    private fun igRow(row: AccessibilityNodeInfo): FeedRow {
+        var header = false
+        var name: String? = null
+        var firstText: String? = null
+        var pic = false
+        var more = false
+        var ad = false
+        var suggested = false
+        var follow = false
+        walk(row, 250) { n ->
+            val id = n.viewIdResourceName?.substringAfter(":id/")
+            if (id != null && id in IG_HEADER_IDS) header = true
+            val text = n.text?.toString()?.trim().orEmpty()
+            val l = label(n)
+            if (id != null && id in IG_NAME_IDS && text.isNotEmpty()) name = text.substringBefore('\n').trim()
+            if (l.isEmpty()) return@walk
+            if (firstText == null && text.isNotEmpty()) firstText = text.substringBefore('\n').trim()
+            if (FeedLabels.isAd(text) || FeedLabels.isAd(n.contentDescription?.toString())) ad = true
+            if (FeedLabels.isSuggested(l)) suggested = true
+            if (l.equals("Follow", ignoreCase = true) && (n.isClickable || n.parent?.isClickable == true)) follow = true
+            if (PROFILE_PIC.matches(l)) pic = true
+            if (MORE_BUTTON.matches(l)) more = true
+        }
+        if (!header && pic && more) header = true
+        val b = bounds(row)
+        return FeedRow(b.top, b.bottom, if (header) (name ?: firstText ?: "") else null, ad, suggested, follow && header)
     }
 
     private fun youtube(pkg: String, root: AccessibilityNodeInfo, prefs: Prefs, screen: Rect): Analysis {

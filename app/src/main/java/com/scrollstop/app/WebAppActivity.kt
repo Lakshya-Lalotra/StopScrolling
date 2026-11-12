@@ -33,8 +33,10 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.webkit.ScriptHandler
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
+import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.progressindicator.LinearProgressIndicator
 import org.json.JSONObject
@@ -77,6 +79,9 @@ class WebAppActivity : AppCompatActivity() {
     private var hiddenSuggested = 0
     private var hiddenReels = 0
     private var closed = false
+    private var currentScript = ""
+    private var earlyScript = false
+    private var scriptHandler: ScriptHandler? = null
     /** Path of a link that was shared or opened in ScrollStop; that one item is allowed. */
     private var sharedPath: String? = null
 
@@ -158,6 +163,7 @@ class WebAppActivity : AppCompatActivity() {
         tvInfo.maxLines = 1
         bar.addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         ui.button(bar, "↻", Ui.Btn.TEXT) { web.reload() }.minWidth = ui.dp(48)
+        ui.button(bar, "⚙", Ui.Btn.TEXT) { showSiteSettings() }.minWidth = ui.dp(48)
         root.addView(bar)
         progress = LinearProgressIndicator(this).apply {
             isIndeterminate = false
@@ -183,9 +189,10 @@ class WebAppActivity : AppCompatActivity() {
             parts += "${Fmt.duration((limit * 60_000L - stats.get(Stats.appMs(site.pkg))).coerceAtLeast(0))} left"
         }
         if (hiddenReels > 0) parts += "$hiddenReels reels"
-        if (hiddenAds > 0) parts += "$hiddenAds ads"
-        if (hiddenSuggested > 0) parts += "$hiddenSuggested suggested"
-        tvInfo.text = parts.joinToString(" · ") + if (hiddenReels + hiddenAds + hiddenSuggested > 0) " hidden" else ""
+        if (prefs.webHideAds || hiddenAds > 0) parts += "$hiddenAds ads"
+        if ((prefs.webHideSuggested && site != WebSite.YOUTUBE) || hiddenSuggested > 0) parts += "$hiddenSuggested suggested"
+        tvInfo.text = parts.joinToString(" · ") +
+            if (prefs.webHideAds || prefs.webHideSuggested || hiddenReels > 0) " hidden" else ""
     }
 
     // ---------------- web view ----------------
@@ -208,14 +215,8 @@ class WebAppActivity : AppCompatActivity() {
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, true)
 
         web.addJavascriptInterface(Bridge(), "ScrollStop")
-        val script = focusScript()
-        val earlyScript = WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
-        if (earlyScript) {
-            // Runs before the page draws, so the Reels button never flashes up.
-            WebViewCompat.addDocumentStartJavaScript(web, script, site.hosts.flatMap {
-                listOf("https://$it", "https://*.$it")
-            }.toSet())
-        }
+        earlyScript = WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
+        installScript()
 
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
@@ -227,7 +228,7 @@ class WebAppActivity : AppCompatActivity() {
                 // Instagram and YouTube change pages without reloading, so check every address change.
                 if (handleNavigation(url, fromHistory = true)) return
                 lastUrl = url
-                if (!earlyScript) view.evaluateJavascript(script, null)
+                if (!earlyScript) view.evaluateJavascript(currentScript, null)
                 else view.evaluateJavascript("window.__scrollstop && window.__scrollstop.run()", null)
             }
 
@@ -237,7 +238,7 @@ class WebAppActivity : AppCompatActivity() {
 
             override fun onPageFinished(view: WebView, url: String) {
                 progress.visibility = View.INVISIBLE
-                if (!earlyScript) view.evaluateJavascript(script, null)
+                if (!earlyScript) view.evaluateJavascript(currentScript, null)
                 CookieManager.getInstance().flush()
             }
 
@@ -276,6 +277,100 @@ class WebAppActivity : AppCompatActivity() {
                 exitFullscreen()
             }
         }
+    }
+
+    /** (Re)builds the page script from the current settings. */
+    private fun installScript() {
+        currentScript = focusScript()
+        if (earlyScript) {
+            // Runs before the page draws, so the Reels button never flashes up.
+            scriptHandler?.remove()
+            scriptHandler = WebViewCompat.addDocumentStartJavaScript(web, currentScript, site.hosts.flatMap {
+                listOf("https://$it", "https://*.$it")
+            }.toSet())
+        }
+    }
+
+    // ---------------- settings panel (like Sociallite's) ----------------
+
+    private fun showSiteSettings() {
+        val ui = Ui(this)
+        val sheet = BottomSheetDialog(this)
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(ui.dp(20), ui.dp(8), ui.dp(20), ui.dp(24))
+        }
+        ui.title(box, site.title).setPadding(0, ui.dp(4), 0, ui.dp(4))
+        var changed = false
+        fun sw(title: String, sub: String?, get: () -> Boolean, set: (Boolean) -> Unit, weakensWhen: Boolean = false) {
+            ui.switchRow(box, title, sub, get()) { on, revert ->
+                if (on == weakensWhen && prefs.isLocked()) {
+                    revert()
+                    Toast.makeText(this, "Strict mode is on: blocking can't be loosened", Toast.LENGTH_SHORT).show()
+                } else {
+                    set(on)
+                    changed = true
+                }
+            }
+        }
+        when (site) {
+            WebSite.INSTAGRAM -> {
+                sw("Block Reels", "Removes the Reels button and reel pages.",
+                    { prefs.blocked(Platform.INSTAGRAM) }, { prefs.setBlocked(Platform.INSTAGRAM, it) })
+                sw("Block suggested posts", "Only posts from people you follow. No \"Suggested for you\".",
+                    { prefs.webHideSuggested }, { prefs.webHideSuggested = it })
+                sw("Block ads", "Sponsored posts and paid partnerships.", { prefs.webHideAds }, { prefs.webHideAds = it })
+                sw("Hide reels in the feed", null, { prefs.webHideFeedReels }, { prefs.webHideFeedReels = it })
+                sw("Block Explore & post search", "Searching for people still works.",
+                    { prefs.blockIgExplore }, { prefs.blockIgExplore = it })
+                sw("Messages only", "Hides the home feed.", { prefs.webIgMessagesOnly }, { prefs.webIgMessagesOnly = it })
+                val names = linkedMapOf("following" to "Following", "favorites" to "Favorites", "home" to "Home (mixed)")
+                ui.buttonRow(box, *names.map { (k, label) ->
+                    Triple((if (prefs.webIgFeed == k) "✓ " else "") + label,
+                        if (prefs.webIgFeed == k) Ui.Btn.FILLED else Ui.Btn.OUTLINED) {
+                        if (k == "home" && prefs.webIgFeed != "home" && prefs.isLocked()) {
+                            Toast.makeText(this, "Strict mode is on: blocking can't be loosened", Toast.LENGTH_SHORT).show()
+                        } else {
+                            prefs.webIgFeed = k
+                            changed = true
+                            sheet.dismiss()
+                        }
+                    }
+                }.toTypedArray())
+            }
+            WebSite.YOUTUBE -> {
+                sw("Block Shorts", null, { prefs.blocked(Platform.YOUTUBE) }, { prefs.setBlocked(Platform.YOUTUBE, it) })
+                sw("Search-only mode", "Hides the Home feed.", { prefs.blockYtHome }, { prefs.blockYtHome = it })
+                sw("Block ads", null, { prefs.webHideAds }, { prefs.webHideAds = it })
+                sw("Block Explore & Trending", null, { prefs.webBlockDiscover }, { prefs.webBlockDiscover = it })
+            }
+            WebSite.FACEBOOK -> {
+                sw("Block Reels", null, { prefs.blocked(Platform.FACEBOOK) }, { prefs.setBlocked(Platform.FACEBOOK, it) })
+                sw("Block Video / Watch", null, { prefs.blockFbWatch }, { prefs.blockFbWatch = it })
+                sw("Block suggested posts", null, { prefs.webHideSuggested }, { prefs.webHideSuggested = it })
+                sw("Block ads", null, { prefs.webHideAds }, { prefs.webHideAds = it })
+            }
+            else -> {
+                sw("Block suggested posts", null, { prefs.webHideSuggested }, { prefs.webHideSuggested = it })
+                sw("Block ads", null, { prefs.webHideAds }, { prefs.webHideAds = it })
+                sw("Block Explore / Popular", null, { prefs.webBlockDiscover }, { prefs.webBlockDiscover = it })
+            }
+        }
+        ui.small(box, "These apply to ScrollStop's ${site.title}. Strict mode only lets you make them stricter.")
+            .setPadding(0, ui.dp(8), 0, 0)
+        sheet.setContentView(android.widget.ScrollView(this).apply { addView(box) })
+        sheet.setOnDismissListener {
+            if (changed) {
+                hiddenAds = 0
+                hiddenSuggested = 0
+                hiddenReels = 0
+                installScript()
+                val url = web.url ?: site.home
+                web.loadUrl(WebRules.feedRedirect(site, url, prefs.webIgFeed) ?: url)
+                updateInfo()
+            }
+        }
+        sheet.show()
     }
 
     /** Returns true if the navigation was stopped. */

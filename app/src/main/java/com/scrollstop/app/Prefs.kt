@@ -15,6 +15,8 @@ class Prefs private constructor(context: Context) {
         }
 
         private const val SCHEMA = 2
+        const val SNOOZE_DAYS = 30L
+        const val DAY_MS = 86_400_000L
     }
 
     val sp: SharedPreferences = context.getSharedPreferences("scrollstop", Context.MODE_PRIVATE)
@@ -48,6 +50,12 @@ class Prefs private constructor(context: Context) {
     var allowInstagramDm: Boolean get() = bool("ig_dm", false); set(v) = setBool("ig_dm", v)
     /** Opening the Instagram app takes you to ScrollStop's Instagram (no ads, suggestions or Reels). */
     var igUseScrollStop: Boolean get() = bool("ig_redirect", false); set(v) = setBool("ig_redirect", v)
+    /** In the Instagram app, scroll past a hidden ad or suggested post once you stop on it. */
+    var igSkipHidden: Boolean get() = bool("ig_skip", true); set(v) = setBool("ig_skip", v)
+    /** When the user last snoozed suggested posts in the Instagram app (Instagram undoes it after 30 days). */
+    var igSnoozedAt: Long get() = long("ig_snoozed", 0L); set(v) = setLong("ig_snoozed", v)
+    var igSnoozeRemindedAt: Long get() = long("ig_snooze_remind", 0L); set(v) = setLong("ig_snooze_remind", v)
+    fun igSnoozeDue(now: Long = System.currentTimeMillis()) = igSnoozedAt > 0 && now - igSnoozedAt >= SNOOZE_DAYS * DAY_MS
     var blockIgExplore: Boolean get() = bool("ig_explore", false); set(v) = setBool("ig_explore", v)
     var blockIgStories: Boolean get() = bool("ig_stories", false); set(v) = setBool("ig_stories", v)
     var blockYtHome: Boolean get() = bool("yt_home", false); set(v) = setBool("yt_home", v)

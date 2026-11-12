@@ -1,6 +1,8 @@
 package com.scrollstop.app
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
+import android.graphics.Path
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -81,6 +83,9 @@ class BlockerService : AccessibilityService() {
     private var lastFlushAt = 0L
     private var lastMinuteAt = 0L
     private var lastRedirectAt = 0L
+    private val feed = FeedMemory()
+    private var lastFeedScrollAt = 0L
+    private var lastSkipAt = 0L
     private var sleepRemindedDay = ""
     private val warned = HashSet<String>()
     private var lastToast: Toast? = null
@@ -157,6 +162,7 @@ class BlockerService : AccessibilityService() {
                 evaluate()
             }
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
+                if (pkg == "com.instagram.android") onFeedScrolled(e)
                 onScrolled(e, pkg)
                 if (isInteresting(pkg)) scheduleEval()
             }
@@ -242,12 +248,13 @@ class BlockerService : AccessibilityService() {
             endWatching()
             return
         }
-        val a = Rules.analyze(platform, pkg, root, prefs, screen)
+        val a = Rules.analyze(platform, pkg, root, prefs, screen, feed)
         if (platform == Platform.INSTAGRAM && prefs.igUseScrollStop) {
             openScrollStopInstagram(if (a.dmThread) "https://www.instagram.com/direct/inbox/" else null)
             return
         }
         hides.show(pkg, if (blockScreen.isShowing || imeVisible()) emptyList() else colorize(pkg, a))
+        if (a.feedSkip != null && a.feedList != null) skipFeedPost(a.feedSkip, a.feedList)
         if (a.dmThread) lastDmSeenAt = SystemClock.elapsedRealtime()
 
         a.closeNow?.let { what ->
@@ -266,17 +273,21 @@ class BlockerService : AccessibilityService() {
     private fun colorize(pkg: String, a: Analysis): List<Hide> {
         val missing = ArrayList<Rect>()
         val out = a.hides.map { h ->
-            if (h.text == null) {
-                val c = sampler.tabColor(pkg, h.rect)
+            // Tab buttons are measured on themselves, feed covers on their post's header row.
+            val spot = h.sample ?: if (h.text == null) h.rect else null
+            if (spot != null) {
+                val c = sampler.tabColor(pkg, spot)
                 when {
                     c != null -> h.copy(color = c)
                     // Don't measure while the Reels/Shorts tab itself is open: it may be highlighted.
-                    sampler.worthTrying(pkg, h.rect) && !a.shortVideo -> {
-                        missing += h.rect
+                    sampler.worthTrying(pkg, spot) && !a.shortVideo -> {
+                        missing += spot
                         h.copy(color = Color.TRANSPARENT)
                     }
-                    else -> h
+                    else -> h.copy(color = sampler.appColor(pkg))
                 }
+            } else if (h.scrolls) {
+                h.copy(color = sampler.colorForWidth(pkg, h.rect.width()) ?: sampler.appColor(pkg))
             } else {
                 h.copy(color = sampler.appColor(pkg))
             }
@@ -305,8 +316,45 @@ class BlockerService : AccessibilityService() {
         }, 250)
     }
 
+    /**
+     * Scrolls the Instagram feed past a hidden ad or suggested post once you've stopped on it, with a
+     * slow drag that comes to rest (so the feed doesn't fling on further).
+     */
+    private fun skipFeedPost(by: Int, list: Rect) {
+        if (!prefs.igSkipHidden) return
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastFeedScrollAt < 700 || now - lastSkipAt < 1_500 || feed.direction < 0 || imeVisible()) return
+        lastSkipAt = now
+        val x = list.exactCenterX()
+        val startY = list.top + list.height() * 0.85f
+        val endY = maxOf(list.top + 20f, startY - by)
+        val move = Path().apply {
+            moveTo(x, startY)
+            lineTo(x, endY)
+        }
+        val duration = (300 + (startY - endY) / 4).toLong().coerceAtMost(700)
+        val drag = GestureDescription.StrokeDescription(move, 0, duration, true)
+        try {
+            dispatchGesture(GestureDescription.Builder().addStroke(drag).build(), object : GestureResultCallback() {
+                override fun onCompleted(gestureDescription: GestureDescription?) {
+                    val rest = Path().apply {
+                        moveTo(x, endY)
+                        lineTo(x, endY + 1)
+                    }
+                    runCatching {
+                        dispatchGesture(GestureDescription.Builder()
+                            .addStroke(drag.continueStroke(rest, 0, 150, false)).build(), null, null)
+                    }
+                }
+            }, null)
+        } catch (e: RuntimeException) {
+            // gestures not allowed (switch the service off and on once after updating)
+        }
+    }
+
     private fun onAppChanged(pkg: String) {
         fgPkg = pkg
+        feed.reset()
         hides.clear()
         endWatching()
         if (blockScreen.isShowing && pkg != blockScreen.forPkg && pkg !in launchers &&
@@ -365,6 +413,15 @@ class BlockerService : AccessibilityService() {
         countMode = 0
         pagerMax = -1
         scrollAcc = 0
+    }
+
+    private fun onFeedScrolled(e: AccessibilityEvent) {
+        lastFeedScrollAt = SystemClock.elapsedRealtime()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
+        val dy = e.scrollDeltaY
+        if (abs(dy) <= 1 || abs(dy) > 5_000) return
+        feed.direction = if (dy > 0) 1 else -1
+        if (hides.isShowing) hides.shift(dy)
     }
 
     private fun onScrolled(e: AccessibilityEvent, pkg: String) {

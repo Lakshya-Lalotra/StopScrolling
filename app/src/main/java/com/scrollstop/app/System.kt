@@ -71,6 +71,10 @@ class ServiceCheckWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, p
         if (prefs.everEnabled && !ServiceState.isEnabled(ctx) && now - prefs.lastOffWarning > 3 * 3_600_000L) {
             if (Notifier.blockerOff(ctx)) prefs.lastOffWarning = now
         }
+        // Instagram turns suggested posts back on 30 days after you snooze them.
+        if (prefs.igSnoozeDue(now) && now - prefs.igSnoozeRemindedAt > Prefs.DAY_MS) {
+            if (Notifier.resnooze(ctx)) prefs.igSnoozeRemindedAt = now
+        }
         return Result.success()
     }
 
@@ -96,6 +100,10 @@ object Notifier {
     /** Returns true if the notification was posted. */
     fun blockerOff(ctx: Context): Boolean =
         post(ctx, ID_OFF, "ScrollStop is switched off", "Reels and Shorts aren't being blocked. Tap to turn it back on.")
+
+    fun resnooze(ctx: Context): Boolean =
+        post(ctx, 3, "Instagram's suggested posts are back",
+            "Instagram only snoozes them for 30 days. Tap to snooze them again.")
 
     fun sleepSoon(ctx: Context, minutes: Int): Boolean =
         post(ctx, ID_SLEEP, "Sleep mode in $minutes min",

@@ -159,6 +159,8 @@ object UrlRules {
     private val END = "(/|\\?|#|$)"
     private val IG_REELS = Regex("^/([^/?#]+/)?reels?$END")
     private val IG_EXPLORE = Regex("^/explore$END")
+    /** Looking someone up stays allowed when Explore is blocked; post/keyword search doesn't. */
+    private val IG_PEOPLE_SEARCH = Regex("^/explore/search/?([?#].*)?$")
     private val IG_STORIES = Regex("^/stories/")
     private val YT_SHORTS = Regex("^/(shorts|feed/shorts)$END")
     private val FB_REELS = Regex("^/(.+/)?reels?$END")
@@ -182,7 +184,8 @@ object UrlRules {
 
         return when {
             on("instagram.com") && c.igReels && IG_REELS.containsMatchIn(path) -> "Instagram Reels"
-            on("instagram.com") && c.igExplore && IG_EXPLORE.containsMatchIn(path) -> "Instagram Explore"
+            on("instagram.com") && c.igExplore && IG_EXPLORE.containsMatchIn(path) &&
+                !IG_PEOPLE_SEARCH.matches(path) -> "Instagram Explore"
             on("instagram.com") && c.igStories && IG_STORIES.containsMatchIn(path) -> "Instagram Stories"
             on("youtube.com") && c.ytShorts && YT_SHORTS.containsMatchIn(path) -> "YouTube Shorts"
             on("facebook.com") && c.fbReels && FB_REELS.containsMatchIn(path) -> "Facebook Reels"

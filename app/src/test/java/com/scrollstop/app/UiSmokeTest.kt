@@ -57,6 +57,19 @@ class UiSmokeTest {
                     .setup().get()
                 shadowOf(Looper.getMainLooper()).idle()
                 assertTrue(!web.isFinishing)
+                // the ⚙ settings panel opens and has switches
+                val gear = findButton(web.window.decorView, "⚙")
+                gear!!.performClick()
+                shadowOf(Looper.getMainLooper()).idle()
+                val sheet = org.robolectric.shadows.ShadowDialog.getLatestDialog()
+                assertTrue(sheet != null && sheet.isShowing)
+                if (site == WebSite.INSTAGRAM) {
+                    val content = sheet.findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)
+                    save(render(content, activity.window.decorView.width, 0,
+                        MaterialColors.getColor(content, android.R.attr.colorBackground)), "${mode}_ig_settings")
+                }
+                sheet.dismiss()
+                shadowOf(Looper.getMainLooper()).idle()
             }
             // the full-screen block reminder shown over other apps
             val themed = ContextThemeWrapper(activity, R.style.Theme_ScrollStop)
@@ -66,6 +79,12 @@ class UiSmokeTest {
             block.findViewById<TextView>(R.id.blkStats).text = "7 blocked today · about 21m saved"
             save(render(block, activity.window.decorView.width, activity.window.decorView.height, null), "${mode}_blockscreen")
         }
+    }
+
+    private fun findButton(v: View, text: String): View? {
+        if (v is TextView && v.text?.toString() == text) return v
+        if (v is android.view.ViewGroup) for (i in 0 until v.childCount) findButton(v.getChildAt(i), text)?.let { return it }
+        return null
     }
 
     /** Puts in some numbers and settings so the screens look like they would after a few days of use. */
