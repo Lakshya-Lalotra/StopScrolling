@@ -51,6 +51,13 @@ class UiSmokeTest {
                 assertTrue("$name is empty", page.childCount > 2)
                 save(fullPage(activity.findViewById(R.id.root), page), "${mode}_$name")
             }
+            // Instagram / YouTube inside ScrollStop open without crashing
+            for (site in WebSite.entries) {
+                val web = Robolectric.buildActivity(WebAppActivity::class.java, WebAppActivity.intent(activity, site))
+                    .setup().get()
+                shadowOf(Looper.getMainLooper()).idle()
+                assertTrue(!web.isFinishing)
+            }
             // the full-screen block reminder shown over other apps
             val themed = ContextThemeWrapper(activity, R.style.Theme_ScrollStop)
             val block = LayoutInflater.from(themed).inflate(R.layout.overlay_block, null)

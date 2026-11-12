@@ -23,6 +23,9 @@ import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.pm.ShortcutInfoCompat
+import androidx.core.content.pm.ShortcutManagerCompat
+import androidx.core.graphics.drawable.IconCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.google.android.material.bottomnavigation.BottomNavigationView
@@ -83,6 +86,7 @@ class MainActivity : AppCompatActivity() {
             true
         }
         ServiceCheckWorker.schedule(this)
+        publishShortcuts()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -145,6 +149,8 @@ class MainActivity : AppCompatActivity() {
                 !enabled -> "🔴  Blocker is off" to "Turn it on so ScrollStop can close Reels and Shorts for you."
                 !running -> "🟠  Blocker isn't running" to
                     "Android stopped it. In Accessibility settings, switch ScrollStop off and on again."
+                prefs.isSleeping() -> "😴  Sleep mode" to
+                    "Social apps are closed until ${Fmt.clock(prefs.sleepEnd)}."
                 prefs.isPaused() -> "⏸  On a break" to
                     "Blocking comes back in ${Fmt.countdown(prefs.pauseUntil - System.currentTimeMillis())}"
                 !prefs.inSchedule() -> "🌙  Outside blocking hours" to
@@ -174,6 +180,20 @@ class MainActivity : AppCompatActivity() {
             }
             ui.small(c, "Xiaomi, Oppo, Vivo, Realme, Samsung: also set ScrollStop's battery use to " +
                 "\"Unrestricted\" / \"No restrictions\", and on Xiaomi turn on Autostart.").setPadding(0, ui.dp(8), 0, 0)
+        }
+
+        // ---- focused browser ----
+        val web = ui.card(page, "Social apps without the feeds",
+            "Open them inside ScrollStop: the Reels, Explore and Shorts buttons are gone completely, " +
+                "and reels, ads and suggested posts are taken out of your feed.")
+        ui.buttonRow(web,
+            Triple("Instagram", Ui.Btn.FILLED) { openWeb(WebSite.INSTAGRAM) },
+            Triple("YouTube", Ui.Btn.FILLED) { openWeb(WebSite.YOUTUBE) },
+        )
+        if (ShortcutManagerCompat.isRequestPinShortcutSupported(this)) {
+            ui.button(web, "Add them to your home screen", Ui.Btn.TEXT) {
+                for (site in WebSite.entries) ShortcutManagerCompat.requestPinShortcut(this, shortcut(site), null)
+            }
         }
 
         // ---- today ----
@@ -246,6 +266,17 @@ class MainActivity : AppCompatActivity() {
             "instagram.com/reels, youtube.com/shorts, facebook.com/reel, snapchat.com/spotlight and the other " +
                 "feeds you block, in Chrome, Firefox, Samsung Internet, Edge, Brave, Opera and more.",
             { prefs.blockBrowsers }, { prefs.blockBrowsers = it })
+
+        val inApp = ui.card(page, "Inside ScrollStop's Instagram & YouTube",
+            "Extra clean-up when you open them from ScrollStop's Home tab.")
+        toggle(inApp, "Hide reels in the feed", "Reel posts are removed from your Instagram home feed.",
+            { prefs.webHideFeedReels }, { prefs.webHideFeedReels = it })
+        toggle(inApp, "Hide suggested posts", "Only posts from people you follow.",
+            { prefs.webHideSuggested }, { prefs.webHideSuggested = it })
+        toggle(inApp, "Hide ads", "Sponsored posts and promoted videos.",
+            { prefs.webHideAds }, { prefs.webHideAds = it })
+        toggle(inApp, "Instagram: messages only", "Hides the home feed too. Messages, search and profiles still work.",
+            { prefs.webIgMessagesOnly }, { prefs.webIgMessagesOnly = it })
 
         appsCard()
     }
@@ -546,6 +577,7 @@ class MainActivity : AppCompatActivity() {
     private fun buildSettings() {
         ui.header(page, "Settings", null)
         strictCard()
+        sleepCard()
         scheduleCard()
 
         val bs = ui.card(page, "When something is blocked")
@@ -571,7 +603,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         val about = ui.card(page, "About")
-        ui.body(about, "ScrollStop ${BuildConfig.VERSION_NAME}\nWorks offline. No internet permission, nothing is collected or sent.",
+        ui.body(about, "ScrollStop ${BuildConfig.VERSION_NAME}\nThe blocker works offline and never sends anything anywhere. " +
+            "Internet is only used by the built-in Instagram and YouTube to load those sites.",
             muted = true)
     }
 
@@ -719,6 +752,59 @@ class MainActivity : AppCompatActivity() {
         b.show()
     }
 
+    // ---- sleep mode ----
+
+    private fun sleepCard() {
+        val c = ui.card(page, "Sleep mode",
+            "At bedtime Instagram, YouTube, Facebook, Snapchat, TikTok and apps with a limit close until you wake up.")
+        toggle(c, "Sleep mode", null, { prefs.sleepOn }, { prefs.sleepOn = it; render() })
+        if (!prefs.sleepOn) return
+        ui.buttonRow(c,
+            Triple("Bedtime ${Fmt.clock(prefs.sleepStart)}", Ui.Btn.OUTLINED) { pickSleepTime(true) },
+            Triple("Wake ${Fmt.clock(prefs.sleepEnd)}", Ui.Btn.OUTLINED) { pickSleepTime(false) },
+        )
+    }
+
+    private fun pickSleepTime(bedtime: Boolean) {
+        val cur = if (bedtime) prefs.sleepStart else prefs.sleepEnd
+        TimePickerDialog(this, { _, h, min ->
+            val v = h * 60 + min
+            val old = prefs.sleepWindow()
+            val new = Sleep.window(true, if (bedtime) v else prefs.sleepStart, if (bedtime) prefs.sleepEnd else v)
+            if (prefs.isLocked() && Sleep.weakens(old, new)) showLockedDialog()
+            else {
+                if (bedtime) prefs.sleepStart = v else prefs.sleepEnd = v
+                render()
+            }
+        }, cur / 60, cur % 60, android.text.format.DateFormat.is24HourFormat(this)).show()
+    }
+
+    // ---- focused browser ----
+
+    private fun openWeb(site: WebSite) {
+        if (prefs.isSleeping()) {
+            toast("Sleep mode is on until ${Fmt.clock(prefs.sleepEnd)}")
+            return
+        }
+        startActivity(WebAppActivity.intent(this, site))
+    }
+
+    private fun shortcut(site: WebSite): ShortcutInfoCompat {
+        val label = if (site == WebSite.INSTAGRAM) "Instagram (no Reels)" else "YouTube (no Shorts)"
+        val icon = if (site == WebSite.INSTAGRAM) R.mipmap.ic_web_instagram else R.mipmap.ic_web_youtube
+        return ShortcutInfoCompat.Builder(this, "web_${site.key}")
+            .setShortLabel(label)
+            .setLongLabel(label)
+            .setIcon(IconCompat.createWithResource(this, icon))
+            .setIntent(WebAppActivity.intent(this, site))
+            .build()
+    }
+
+    /** Long-press ScrollStop's icon to jump straight into Instagram or YouTube without the feeds. */
+    private fun publishShortcuts() {
+        runCatching { ShortcutManagerCompat.setDynamicShortcuts(this, WebSite.entries.map { shortcut(it) }) }
+    }
+
     // ---- schedule ----
 
     private fun scheduleCard() {
@@ -802,7 +888,7 @@ class MainActivity : AppCompatActivity() {
                     "Greyed out? (Android 13+) Open App info → ⋮ menu (top right) → \"Allow restricted settings\", " +
                     "then try again.\n\n" +
                     "ScrollStop only looks for Reels, Shorts and Spotlight screens. It never stores or sends what's on " +
-                    "your screen, and it has no internet access."
+                    "your screen."
             )
             .setPositiveButton("Open settings") { _, _ -> open(ServiceState.accessibilitySettings()) }
             .setNeutralButton("App info") { _, _ -> open(ServiceState.appInfo(this)) }

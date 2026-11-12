@@ -13,4 +13,6 @@
     <color name="hide_bg">#FFFFFFFF</color>
     <color name="hide_fg">#FF8A8A99</color>
     <color name="icon_bg">#FF5B4BDB</color>
+    <color name="web_instagram">#FFC13584</color>
+    <color name="web_youtube">#FFE53935</color>
 </resources>

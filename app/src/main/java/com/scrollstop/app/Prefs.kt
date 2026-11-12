@@ -82,6 +82,26 @@ class Prefs private constructor(context: Context) {
         return schedule.isBlockingAt(iso, c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE))
     }
 
+    // ---- sleep mode ----
+    var sleepOn: Boolean get() = bool("sleep", false); set(v) = setBool("sleep", v)
+    var sleepStart: Int get() = int("sleep_start", 23 * 60); set(v) = setInt("sleep_start", v)
+    var sleepEnd: Int get() = int("sleep_end", 7 * 60); set(v) = setInt("sleep_end", v)
+    fun sleepWindow(): Schedule? = Sleep.window(sleepOn, sleepStart, sleepEnd)
+
+    /** True during sleep hours (breaks still pause it, unless strict mode has breaks turned off). */
+    fun isSleeping(): Boolean {
+        if (isPaused()) return false
+        val c = Calendar.getInstance()
+        val iso = (c.get(Calendar.DAY_OF_WEEK) + 5) % 7 + 1
+        return Sleep.isSleeping(sleepWindow(), iso, c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE))
+    }
+
+    // ---- ScrollStop's own browser ----
+    var webHideAds: Boolean get() = bool("web_ads", true); set(v) = setBool("web_ads", v)
+    var webHideSuggested: Boolean get() = bool("web_suggested", true); set(v) = setBool("web_suggested", v)
+    var webHideFeedReels: Boolean get() = bool("web_feed_reels", true); set(v) = setBool("web_feed_reels", v)
+    var webIgMessagesOnly: Boolean get() = bool("web_ig_home", false); set(v) = setBool("web_ig_home", v)
+
     // ---- breaks ----
     var pauseUntil: Long get() = long("pause", 0L); set(v) = setLong("pause", v)
     fun isPaused() = System.currentTimeMillis() < pauseUntil

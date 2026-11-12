@@ -208,3 +208,67 @@ class ColorsTest {
         assertFalse(Colors.isDark(0xFFF5F5F5.toInt()))
     }
 }
+
+class WebRulesTest {
+    private val cfg = UrlRules.Config(igExplore = true)
+    private val ig = WebSite.INSTAGRAM
+    private val yt = WebSite.YOUTUBE
+
+    @Test fun instagramPages() {
+        assertEquals(WebRules.Decision.Allow, WebRules.decide(ig, "https://www.instagram.com/", null, cfg, false))
+        assertEquals(WebRules.Decision.Allow, WebRules.decide(ig, "https://www.instagram.com/direct/inbox/", null, cfg, false))
+        assertEquals(WebRules.Decision.Block("Instagram Reels"),
+            WebRules.decide(ig, "https://www.instagram.com/reels/", null, cfg, false))
+        assertEquals(WebRules.Decision.Block("Instagram Explore"),
+            WebRules.decide(ig, "https://www.instagram.com/explore/", null, cfg, false))
+        // Facebook login is allowed, other sites open outside, app links are ignored
+        assertEquals(WebRules.Decision.Allow, WebRules.decide(ig, "https://m.facebook.com/login/", null, cfg, false))
+        assertEquals(WebRules.Decision.External, WebRules.decide(ig, "https://example.com/x", null, cfg, false))
+        assertEquals(WebRules.Decision.Ignore, WebRules.decide(ig, "intent://reels#Intent;scheme=instagram;end", null, cfg, false))
+        assertEquals(WebRules.Decision.Ignore, WebRules.decide(ig, "instagram://reels", null, cfg, false))
+    }
+
+    @Test fun reelFromDms() {
+        val dm = "https://www.instagram.com/direct/t/123/"
+        val reel = "https://www.instagram.com/reel/AbC123/"
+        assertEquals(WebRules.Decision.Allow, WebRules.decide(ig, reel, dm, cfg, true))
+        assertEquals(WebRules.Decision.Block("Instagram Reels"), WebRules.decide(ig, reel, dm, cfg, false))
+        assertEquals(WebRules.Decision.Block("Instagram Reels"),
+            WebRules.decide(ig, reel, "https://www.instagram.com/", cfg, true))
+        assertEquals(WebRules.Decision.Block("Instagram Reels"),
+            WebRules.decide(ig, "https://www.instagram.com/reels/", dm, cfg, true))
+    }
+
+    @Test fun youtube() {
+        assertEquals(WebRules.Decision.Block("YouTube Shorts"),
+            WebRules.decide(yt, "https://m.youtube.com/shorts/xyz", null, cfg, false))
+        assertEquals(WebRules.Decision.Allow, WebRules.decide(yt, "https://m.youtube.com/watch?v=1", null, cfg, false))
+        assertEquals(WebRules.Decision.Allow, WebRules.decide(yt, "https://accounts.google.com/signin", null, cfg, false))
+        assertEquals(WebRules.Decision.Ignore, WebRules.decide(yt, "vnd.youtube:abc", null, cfg, false))
+        assertEquals(WebRules.Decision.Allow, WebRules.decide(yt, "about:blank", null, cfg, false))
+    }
+
+    @Test fun urlParts() {
+        assertEquals("www.instagram.com", WebRules.hostOf("https://www.instagram.com:443/p/1"))
+        assertEquals("/p/1", WebRules.pathOf("https://www.instagram.com/p/1"))
+        assertEquals("/", WebRules.pathOf("https://www.instagram.com?x=1"))
+    }
+}
+
+class SleepTest {
+    @Test fun sleepWindow() {
+        val w = Sleep.window(true, 23 * 60, 7 * 60)
+        assertTrue(Sleep.isSleeping(w, 3, 23 * 60 + 30))
+        assertTrue(Sleep.isSleeping(w, 4, 6 * 60))
+        assertFalse(Sleep.isSleeping(w, 4, 12 * 60))
+        assertFalse(Sleep.isSleeping(Sleep.window(false, 23 * 60, 7 * 60), 4, 6 * 60))
+    }
+
+    @Test fun weakening() {
+        val w = Sleep.window(true, 23 * 60, 7 * 60)
+        assertTrue(Sleep.weakens(w, null))                                  // switching it off
+        assertTrue(Sleep.weakens(w, Sleep.window(true, 0, 7 * 60)))         // later bedtime
+        assertFalse(Sleep.weakens(w, Sleep.window(true, 22 * 60, 8 * 60)))  // longer sleep
+        assertFalse(Sleep.weakens(null, w))                                 // switching it on
+    }
+}

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A plain play-button glyph for the "YouTube (no Shorts)" shortcut. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M42,38h24a12,12 0,0 1,12 12v8a12,12 0,0 1,-12 12h-24a12,12 0,0 1,-12 -12v-8a12,12 0,0 1,12 -12z" />
+    <path android:fillColor="#E53935" android:pathData="M49,45.5v17l14,-8.5z" />
+</vector>

@@ -165,6 +165,9 @@ class BlockerService : AccessibilityService() {
         Platform.of(pkg) != null || pkg in Apps.TIKTOK || pkg in Apps.BROWSER_URL_BARS ||
             pkg in limits || pkg in Apps.SETTINGS
 
+    private fun isSocialApp(pkg: String): Boolean =
+        Platform.of(pkg) != null || pkg in Apps.TIKTOK || pkg in limits
+
     private fun isTracked(pkg: String): Boolean =
         Platform.of(pkg) != null || pkg in Apps.TIKTOK || pkg in limits
 
@@ -199,6 +202,15 @@ class BlockerService : AccessibilityService() {
             if (prefs.guardSettings && prefs.isLocked() &&
                 Rules.isProtectedSettingsScreen(pkg, root, appLabel, screen)
             ) guard()
+            return
+        }
+
+        // Sleep mode closes social apps whatever else is set (except during a break).
+        if (prefs.isSleeping() && isSocialApp(pkg)) {
+            hides.clear()
+            endWatching()
+            block("Sleep mode", "Social apps are closed until ${Fmt.clock(prefs.sleepEnd)}. Sleep well.",
+                "sleep", pkg, GLOBAL_ACTION_HOME)
             return
         }
 

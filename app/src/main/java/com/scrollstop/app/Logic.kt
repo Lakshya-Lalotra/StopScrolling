@@ -300,3 +300,96 @@ object Colors {
         return 0.299 * r + 0.587 * g + 0.114 * b < 128
     }
 }
+
+/** Social sites ScrollStop can open in its own focused browser, with the feeds taken out. */
+enum class WebSite(
+    val key: String,
+    val title: String,
+    val home: String,
+    /** Time spent here counts towards this app's stats and daily limit. */
+    val pkg: String,
+    val platform: Platform,
+    /** Pages that stay inside ScrollStop. */
+    val hosts: Set<String>,
+    /** Sign-in pages that are allowed too. */
+    val loginHosts: Set<String>,
+) {
+    INSTAGRAM(
+        "instagram", "Instagram", "https://www.instagram.com/", "com.instagram.android", Platform.INSTAGRAM,
+        setOf("instagram.com"), setOf("facebook.com", "fb.com", "fbsbx.com"),
+    ),
+    YOUTUBE(
+        "youtube", "YouTube", "https://m.youtube.com/", "com.google.android.youtube", Platform.YOUTUBE,
+        setOf("youtube.com", "youtu.be"), setOf("accounts.google.com", "consent.google.com", "google.com"),
+    );
+
+    companion object {
+        fun byKey(key: String?): WebSite? = entries.firstOrNull { it.key == key }
+    }
+}
+
+/** Decides what happens when a page inside the focused browser tries to open an address. */
+object WebRules {
+    sealed class Decision {
+        object Allow : Decision()
+        /** Open in the phone's normal browser or app. */
+        object External : Decision()
+        /** Do nothing (e.g. "open in the Instagram app" links, which would get around the blocks). */
+        object Ignore : Decision()
+        data class Block(val label: String) : Decision()
+    }
+
+    private val DM_REEL = Regex("^/reels?/[^/?#]+")
+
+    fun hostOf(url: String): String =
+        url.substringAfter("://", "").substringBefore('/').substringBefore('?').substringBefore('#')
+            .substringBefore(':').lowercase(Locale.ROOT)
+
+    fun pathOf(url: String): String {
+        val rest = url.substringAfter("://", "")
+        val i = rest.indexOfFirst { it == '/' || it == '?' || it == '#' }
+        return if (i < 0 || rest[i] != '/') "/" else rest.substring(i)
+    }
+
+    private fun onDomain(host: String, domains: Set<String>) =
+        domains.any { host == it || host.endsWith(".$it") }
+
+    /**
+     * [prevUrl] is the page the user was on; a reel opened from Instagram DMs is allowed when
+     * [allowDmReel] is on, but the Reels feed itself never is.
+     */
+    fun decide(site: WebSite, url: String, prevUrl: String?, cfg: UrlRules.Config, allowDmReel: Boolean): Decision {
+        val scheme = url.substringBefore(':', "").lowercase(Locale.ROOT)
+        if (scheme == "about" || scheme == "blob" || scheme == "data" || scheme == "javascript") return Decision.Allow
+        if (scheme == "mailto" || scheme == "tel" || scheme == "sms") return Decision.External
+        if (scheme != "http" && scheme != "https") return Decision.Ignore
+        val host = hostOf(url)
+        if (onDomain(host, site.hosts)) {
+            val label = UrlRules.match(url, cfg) ?: return Decision.Allow
+            val fromDm = prevUrl != null && onDomain(hostOf(prevUrl), site.hosts) &&
+                pathOf(prevUrl).startsWith("/direct/")
+            if (site == WebSite.INSTAGRAM && allowDmReel && fromDm && DM_REEL.containsMatchIn(pathOf(url)) &&
+                !pathOf(url).matches(Regex("^/reels/?([?#].*)?$"))
+            ) return Decision.Allow
+            return Decision.Block(label)
+        }
+        if (onDomain(host, site.loginHosts)) return Decision.Allow
+        return Decision.External
+    }
+}
+
+/** Sleep mode: social apps are closed between bedtime and wake-up, every day. */
+object Sleep {
+    fun window(on: Boolean, start: Int, end: Int): Schedule? =
+        if (on) Schedule(true, start, end, Schedule.ALL_DAYS) else null
+
+    fun isSleeping(window: Schedule?, isoDay: Int, minuteOfDay: Int): Boolean =
+        window != null && window.isBlockingAt(isoDay, minuteOfDay)
+
+    /** True if [new] lets you use your apps at a time [old] didn't (a weakening). */
+    fun weakens(old: Schedule?, new: Schedule?): Boolean = when {
+        old == null -> false
+        new == null -> true
+        else -> new.weakerThan(old)
+    }
+}

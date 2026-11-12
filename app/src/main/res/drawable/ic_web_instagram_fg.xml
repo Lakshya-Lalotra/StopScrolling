@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A plain camera glyph (not the Instagram logo) for the "Instagram (no Reels)" shortcut. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <path android:strokeColor="#FFFFFF" android:strokeWidth="5" android:fillColor="#00000000"
+        android:pathData="M46,34h16a12,12 0,0 1,12 12v16a12,12 0,0 1,-12 12h-16a12,12 0,0 1,-12 -12v-16a12,12 0,0 1,12 -12z" />
+    <path android:strokeColor="#FFFFFF" android:strokeWidth="5" android:fillColor="#00000000"
+        android:pathData="M54,44a10,10 0,1 0,0.01 0z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M66,39.5a3,3 0,1 0,0.01 0z" />
+</vector>
