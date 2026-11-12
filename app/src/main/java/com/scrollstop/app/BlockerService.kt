@@ -79,6 +79,8 @@ class BlockerService : AccessibilityService() {
     private var guardStrikes = 0
     private var lastTickAt = 0L
     private var lastFlushAt = 0L
+    private var lastMinuteAt = 0L
+    private var sleepRemindedDay = ""
     private val warned = HashSet<String>()
     private var lastToast: Toast? = null
 
@@ -480,6 +482,24 @@ class BlockerService : AccessibilityService() {
         // Re-check limits and allowances, and make sure covers never stay on top of another app.
         if ((pkg != null && isInteresting(pkg)) || hides.isShowing) evaluate()
         maybeFlush(now)
+        if (now - lastMinuteAt >= 60_000) {
+            lastMinuteAt = now
+            everyMinute()
+        }
+    }
+
+    /** Bedtime heads-up and widget refresh. */
+    private fun everyMinute() {
+        ScrollStopWidget.refresh(this)
+        val remind = prefs.sleepReminder
+        if (remind <= 0) return
+        val left = Sleep.minutesToBedtime(prefs.sleepWindow(), prefs.isoToday(), prefs.minuteNow()) ?: return
+        val day = stats.day()
+        if (left <= remind && sleepRemindedDay != day) {
+            sleepRemindedDay = day
+            Notifier.sleepSoon(this, left)
+            toast("Sleep mode starts in $left min")
+        }
     }
 
     private fun maybeFlush(now: Long) {

@@ -5,4 +5,9 @@
     <color name="on_primary_container">#FFE6E1FF</color>
     <color name="hide_bg">#FF000000</color>
     <color name="hide_fg">#FF77778A</color>
+    <color name="widget_bg">#F2201F27</color>
+    <color name="widget_chip">#FF34314A</color>
+    <color name="widget_fg">#FFEDEBF5</color>
+    <color name="widget_muted">#FFA9A6B8</color>
+    <color name="widget_accent">#FFB3A8FF</color>
 </resources>

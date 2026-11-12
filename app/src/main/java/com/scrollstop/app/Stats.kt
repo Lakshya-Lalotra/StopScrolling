@@ -27,6 +27,8 @@ class Stats private constructor(context: Context) {
         fun shortMs(p: Platform) = "sv_ms:${p.key}"
         fun shortCount(p: Platform) = "sv_n:${p.key}"
         fun appMs(pkg: String) = "app_ms:$pkg"
+        /** Time spent in that app inside ScrollStop's own browser (also counted in [appMs]). */
+        fun webMs(pkg: String) = "web_ms:$pkg"
 
         /** Rough guess used for "time saved": one blocked opening ≈ 3 minutes of scrolling avoided. */
         const val MINUTES_SAVED_PER_BLOCK = 3

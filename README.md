@@ -1,49 +1,52 @@
 # ScrollStop: Reels & Shorts blocker for Android
 
 Blocks the short-video feeds and keeps the rest of each app usable (DMs, posts, search, normal YouTube videos).
-Works offline: no internet permission, nothing is collected or sent.
+The blocker works offline and never sends anything anywhere.
 
 ## Features
 
-**Feeds it blocks inside the real apps**
-- **Instagram**: Reels tab + any reel opened from feed, profile or Explore. Optional: allow single reels friends send in DMs (swiping on is still blocked), hide Explore (search keeps working), block Stories.
-- **YouTube**: Shorts tab + Shorts player (normal videos still work). Optional **search-only mode** that hides the Home feed.
+**Social apps without the feeds, inside ScrollStop** (like SocialLite's focused browser)
+- **Instagram, YouTube, Facebook, X, Reddit and LinkedIn** open inside ScrollStop. The Reels, Explore and Shorts
+  buttons are **removed completely**, and the pages behind them can't be opened.
+- Reels, **ads** and **suggested posts** are taken out of the feed. Instagram can show your **Following** feed
+  (people you follow, newest first) or **Favorites** instead of the algorithm's mix, or messages only.
+- **Explore / Popular pages blocked**: YouTube Explore, X Explore, Reddit Popular and All.
+- **Links from friends**: share a reel or video link to ScrollStop (or make links open in it) and you can watch
+  that one, but not swipe on to the next.
+- Home-screen shortcuts ("Instagram (no Reels)", "YouTube (no Shorts)"...) and a long-press menu on the app icon.
+- Time inside counts towards each app's stats and daily limit; a top bar shows today's time and what was hidden.
+
+**Inside the real apps** (via the accessibility service)
+- **Instagram**: Reels tab + any reel opened from feed, profile or Explore. Optional: allow single reels friends send
+  in DMs (swiping on is still blocked), hide Explore, block Stories.
+- **YouTube**: Shorts tab + Shorts player (normal videos still work). Optional **search-only mode** that hides Home.
 - **Facebook**: Reels tab + reel player. Optional: block the Video/Watch tab.
 - **Snapchat**: Spotlight.
-- **Hide the tab buttons**: the Reels / Shorts / Spotlight buttons are covered so they can't be tapped.
-- **Web browsers**: instagram.com/reels, youtube.com/shorts, facebook.com/reel, snapchat.com/spotlight (and TikTok if blocked) in Chrome, Firefox, Samsung Internet, Edge, Brave, Opera, DuckDuckGo, Vivaldi and more.
+- **Tab buttons covered** in the app's own colour so they look removed (Android doesn't allow truly deleting
+  another app's buttons; for that, use the inside-ScrollStop versions above).
+- **Web browsers**: the same feeds are blocked in Chrome, Firefox, Samsung Internet, Edge, Brave, Opera and more.
 
 **Limits**
-- **Daily allowance per feed**: by time (1–60 min) and/or by number of videos (1–100). The feed closes when either runs out, until tomorrow. Warning when 1 minute / 1 video is left.
+- **Daily allowance per feed**: by time (1–60 min) and/or number of videos (1–100), then closed until tomorrow.
 - **Whole-app blocks and daily time limits** for any app (e.g. "TikTok: blocked", "Instagram: 30 min a day").
-- **Blocking hours**: only block at certain times, on chosen days (overnight windows work).
-- **Breaks**: pause everything for 5 / 15 / 30 minutes.
+- **Sleep mode**: social apps close between bedtime and wake-up on the nights you pick, with a heads-up beforehand.
+- **Blocking hours** on chosen days, and **breaks** of 5 / 15 / 30 minutes.
 
-**Strict mode** (can't loosen anything while it's on: no breaks, no turning blocks off, no bigger allowances)
-- Unlocks by **timer** (1 hour to 1 week), **PIN** (for parents or an accountability friend) or **typing a sentence**.
-- **Protection**: the Settings screens that would switch ScrollStop off, force-stop it or uninstall it close right away.
+**Strict mode** (can't loosen anything while it's on)
+- Unlocks by **timer** (1 hour to 1 week), **PIN** (for parents or a friend) or **typing a sentence**.
+- **Protection**: the Settings screens that would switch ScrollStop off, force-stop it, disconnect its filter or
+  uninstall it close right away.
 
-**Other**
-- Full-screen reminder when something is blocked (with your own message, or random nudges), or just a short toast.
-- **Stats**: blocks, videos watched and time in feeds today; time per app; 7-day chart; all-time totals and time saved.
-- Setup checklist (accessibility, battery, notifications) and a **notification if Android switches the blocker off**.
-- Light and dark theme.
+**Adult content filter** (optional)
+- Blocks adult and harmful sites in every app using Cloudflare's free family DNS (1.1.1.3), through a VPN that only
+  carries DNS lookups. Turns itself back on after a restart.
 
-## Get the APK without a computer (GitHub, works from your phone)
-1. Push this repository to GitHub (it's already set up in `.github/workflows/build.yml`).
-2. Open the **Actions** tab. The "Build APK" job runs on every push (or tap **Run workflow**).
-3. After ~5 minutes, open the finished run → **Artifacts** → download **ScrollStop-apk**, unzip it, install `app-release.apk`.
-
-## Or build it yourself
-Android Studio: open this folder → wait for Gradle sync → **Build → Build APK(s)**.
-Command line (JDK 17+, Android SDK): `./gradlew assembleRelease` → `app/build/outputs/apk/release/app-release.apk`.
-Tests: `./gradlew testDebugUnitTest` (set `SCROLLSTOP_SCREENSHOTS=/some/dir` to also save a PNG of every screen).
-
-### About signing
-Every build is signed with the same key (`app/scrollstop.jks`), so new versions install **over** old ones and keep your
-settings and stats. (Version 1 builds from GitHub Actions were signed with a random key each time, so **uninstall the old
-ScrollStop once** before installing this version.) If your repository is public and you'd rather use a private key, set the
-`SCROLLSTOP_KEYSTORE`, `SCROLLSTOP_PASSWORD` and `SCROLLSTOP_ALIAS` environment variables (or GitHub secrets) when building.
+**Stats & more**
+- Blocks, videos watched, time in feeds, time per app, 7-day chart, all-time totals, time saved, and
+  **"locked in"**: how much of your social time happened inside ScrollStop's feed-free apps.
+- **Home-screen widget** with today's time and quick buttons.
+- Full-screen reminder when something is blocked (your own message or random nudges), light and dark theme,
+  setup checklist, and a notification if Android switches the blocker off.
 
 ## If Play Protect says "App blocked to protect your device"
 In some countries (India included) Google Play Protect blocks any app installed from a browser, chat app or file manager
@@ -63,8 +66,13 @@ either:
 4. Follow the **Finish setup** card: allow running in the background (battery: Unrestricted) and notifications.
    On Xiaomi also enable **Autostart**.
 
+## Privacy
+The blocker reads the screen only to find the feeds it blocks, and keeps nothing. Internet access is used only to load
+the social sites you open inside ScrollStop, and by the optional adult filter to ask Cloudflare's family DNS for
+addresses. Stats stay on the phone.
+
 ## Limits of this approach
-ScrollStop reads the screen through Android's accessibility service, like Sociallite and similar blockers. That means:
+For the real apps ScrollStop works through Android's accessibility service. That means:
 - Reels that autoplay *inside* the Instagram home feed are not hidden; opening them is blocked.
 - Facebook Lite and Snapchat expose little screen information, so blocking there is best-effort.
 - Apps rename their internal screen IDs now and then. If a block stops working after an app update, add the new ID to the
@@ -80,4 +88,7 @@ ScrollStop reads the screen through Android's accessibility service, like Social
 | `Logic.kt` | Plain rules (allowance, schedule, browser URLs, lock, app limits), unit tested |
 | `Prefs.kt` / `Stats.kt` | Settings and daily counters |
 | `MainActivity.kt` / `Ui.kt` | The app's four tabs |
-| `System.kt` | Service checks and the "blocker is off" reminder |
+| `System.kt` | Service checks and reminders |
+| `WebAppActivity.kt` + `res/raw/*.js` | Social sites inside ScrollStop with the feeds removed |
+| `FilterVpnService.kt` | Optional adult-content DNS filter |
+| `ScrollStopWidget.kt` | Home-screen widget |

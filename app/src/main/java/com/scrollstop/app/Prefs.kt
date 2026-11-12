@@ -86,7 +86,13 @@ class Prefs private constructor(context: Context) {
     var sleepOn: Boolean get() = bool("sleep", false); set(v) = setBool("sleep", v)
     var sleepStart: Int get() = int("sleep_start", 23 * 60); set(v) = setInt("sleep_start", v)
     var sleepEnd: Int get() = int("sleep_end", 7 * 60); set(v) = setInt("sleep_end", v)
-    fun sleepWindow(): Schedule? = Sleep.window(sleepOn, sleepStart, sleepEnd)
+    var sleepDays: Int get() = int("sleep_days", Schedule.ALL_DAYS); set(v) = setInt("sleep_days", v)
+    /** Minutes before bedtime to give a heads-up (0 = none). */
+    var sleepReminder: Int get() = int("sleep_remind", 30); set(v) = setInt("sleep_remind", v)
+    fun sleepWindow(): Schedule? = Sleep.window(sleepOn, sleepStart, sleepEnd, sleepDays)
+
+    fun isoToday(): Int = (Calendar.getInstance().get(Calendar.DAY_OF_WEEK) + 5) % 7 + 1
+    fun minuteNow(): Int = Calendar.getInstance().let { it.get(Calendar.HOUR_OF_DAY) * 60 + it.get(Calendar.MINUTE) }
 
     /** True during sleep hours (breaks still pause it, unless strict mode has breaks turned off). */
     fun isSleeping(): Boolean {
@@ -101,6 +107,13 @@ class Prefs private constructor(context: Context) {
     var webHideSuggested: Boolean get() = bool("web_suggested", true); set(v) = setBool("web_suggested", v)
     var webHideFeedReels: Boolean get() = bool("web_feed_reels", true); set(v) = setBool("web_feed_reels", v)
     var webIgMessagesOnly: Boolean get() = bool("web_ig_home", false); set(v) = setBool("web_ig_home", v)
+    /** Instagram feed inside ScrollStop: "home", "following" (people you follow, newest first) or "favorites". */
+    var webIgFeed: String get() = str("web_ig_feed", "following"); set(v) = setStr("web_ig_feed", v)
+    /** Blocks endless discover pages: YouTube Explore, X Explore, Reddit Popular/All, Facebook Gaming. */
+    var webBlockDiscover: Boolean get() = bool("web_discover", true); set(v) = setBool("web_discover", v)
+
+    // ---- adult content filter ----
+    var adultFilter: Boolean get() = bool("adult_filter", false); set(v) = setBool("adult_filter", v)
 
     // ---- breaks ----
     var pauseUntil: Long get() = long("pause", 0L); set(v) = setLong("pause", v)

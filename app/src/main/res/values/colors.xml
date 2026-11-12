@@ -15,4 +15,9 @@
     <color name="icon_bg">#FF5B4BDB</color>
     <color name="web_instagram">#FFC13584</color>
     <color name="web_youtube">#FFE53935</color>
+    <color name="widget_bg">#F2FFFFFF</color>
+    <color name="widget_chip">#FFEDEAFF</color>
+    <color name="widget_fg">#FF1C1B22</color>
+    <color name="widget_muted">#FF6B6878</color>
+    <color name="widget_accent">#FF5B4BDB</color>
 </resources>

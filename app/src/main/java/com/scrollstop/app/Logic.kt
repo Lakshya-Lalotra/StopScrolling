@@ -63,6 +63,7 @@ object Apps {
         "com.vivo.permissionmanager",
         "com.huawei.systemmanager",
         "com.google.android.permissioncontroller",
+        "com.android.vpndialogs",
     )
 }
 
@@ -308,23 +309,53 @@ enum class WebSite(
     val home: String,
     /** Time spent here counts towards this app's stats and daily limit. */
     val pkg: String,
-    val platform: Platform,
+    /** The native app's feed settings that also apply here (null = none). */
+    val platform: Platform?,
     /** Pages that stay inside ScrollStop. */
     val hosts: Set<String>,
     /** Sign-in pages that are allowed too. */
     val loginHosts: Set<String>,
+    /** Endless "discover" pages, blocked when that option is on. */
+    val discover: Regex?,
+    val discoverLabel: String,
 ) {
     INSTAGRAM(
         "instagram", "Instagram", "https://www.instagram.com/", "com.instagram.android", Platform.INSTAGRAM,
-        setOf("instagram.com"), setOf("facebook.com", "fb.com", "fbsbx.com"),
+        setOf("instagram.com"), setOf("facebook.com", "fb.com", "fbsbx.com"), null, "",
     ),
     YOUTUBE(
         "youtube", "YouTube", "https://m.youtube.com/", "com.google.android.youtube", Platform.YOUTUBE,
         setOf("youtube.com", "youtu.be"), setOf("accounts.google.com", "consent.google.com", "google.com"),
+        Regex("^/feed/(explore|trending)"), "YouTube Explore",
+    ),
+    FACEBOOK(
+        "facebook", "Facebook", "https://m.facebook.com/", "com.facebook.katana", Platform.FACEBOOK,
+        setOf("facebook.com", "fb.com", "fb.watch"), emptySet(), Regex("^/(gaming|marketplace)(/|$)"), "Facebook Gaming/Marketplace",
+    ),
+    X(
+        "x", "X", "https://x.com/home", "com.twitter.android", null,
+        setOf("x.com", "twitter.com"), emptySet(), Regex("^/(explore|i/trends)(/|$|\\?)"), "X Explore",
+    ),
+    REDDIT(
+        "reddit", "Reddit", "https://www.reddit.com/", "com.reddit.frontpage", null,
+        setOf("reddit.com", "redd.it"), setOf("accounts.google.com"), Regex("^/(r/(popular|all)|explore)(/|$|\\?)"),
+        "Reddit Popular",
+    ),
+    LINKEDIN(
+        "linkedin", "LinkedIn", "https://www.linkedin.com/feed/", "com.linkedin.android", null,
+        setOf("linkedin.com", "lnkd.in"), emptySet(), null, "",
     );
+
+    val statKey get() = platform?.key ?: key
 
     companion object {
         fun byKey(key: String?): WebSite? = entries.firstOrNull { it.key == key }
+
+        /** The site a shared or opened link belongs to, if ScrollStop can show it. */
+        fun forUrl(url: String): WebSite? {
+            val host = WebRules.hostOf(url)
+            return entries.firstOrNull { s -> s.hosts.any { host == it || host.endsWith(".$it") } }
+        }
     }
 }
 
@@ -340,6 +371,8 @@ object WebRules {
     }
 
     private val DM_REEL = Regex("^/reels?/[^/?#]+")
+    private val REELS_FEED = Regex("^/reels/?([?#].*)?$")
+    private val URL_IN_TEXT = Regex("https?://[^\\s<>\"]+")
 
     fun hostOf(url: String): String =
         url.substringAfter("://", "").substringBefore('/').substringBefore('?').substringBefore('#')
@@ -351,37 +384,68 @@ object WebRules {
         return if (i < 0 || rest[i] != '/') "/" else rest.substring(i)
     }
 
+    /** Path without query or fragment, without a trailing slash. */
+    fun cleanPath(url: String): String =
+        pathOf(url).substringBefore('?').substringBefore('#').trimEnd('/').ifEmpty { "/" }
+
+    /** First web address in a shared text, e.g. "Check this out https://www.instagram.com/reel/x/". */
+    fun firstUrl(text: String?): String? = text?.let { URL_IN_TEXT.find(it)?.value?.trimEnd('.', ',', ')', '!') }
+
     private fun onDomain(host: String, domains: Set<String>) =
         domains.any { host == it || host.endsWith(".$it") }
 
     /**
      * [prevUrl] is the page the user was on; a reel opened from Instagram DMs is allowed when
-     * [allowDmReel] is on, but the Reels feed itself never is.
+     * [allowDmReel] is on, but the Reels feed itself never is. [sharedPath] is a link a friend sent
+     * that was opened in ScrollStop: that one video is allowed, the next one isn't.
      */
-    fun decide(site: WebSite, url: String, prevUrl: String?, cfg: UrlRules.Config, allowDmReel: Boolean): Decision {
+    fun decide(
+        site: WebSite,
+        url: String,
+        prevUrl: String?,
+        cfg: UrlRules.Config,
+        allowDmReel: Boolean,
+        blockDiscover: Boolean = false,
+        sharedPath: String? = null,
+    ): Decision {
         val scheme = url.substringBefore(':', "").lowercase(Locale.ROOT)
         if (scheme == "about" || scheme == "blob" || scheme == "data" || scheme == "javascript") return Decision.Allow
         if (scheme == "mailto" || scheme == "tel" || scheme == "sms") return Decision.External
         if (scheme != "http" && scheme != "https") return Decision.Ignore
         val host = hostOf(url)
         if (onDomain(host, site.hosts)) {
-            val label = UrlRules.match(url, cfg) ?: return Decision.Allow
+            val path = pathOf(url)
+            val label = UrlRules.match(url, cfg)
+                ?: site.discover?.takeIf { blockDiscover && it.containsMatchIn(path) }?.let { site.discoverLabel }
+                ?: return Decision.Allow
+            if (sharedPath != null && cleanPath(url) == sharedPath && !REELS_FEED.matches(path)) return Decision.Allow
             val fromDm = prevUrl != null && onDomain(hostOf(prevUrl), site.hosts) &&
                 pathOf(prevUrl).startsWith("/direct/")
-            if (site == WebSite.INSTAGRAM && allowDmReel && fromDm && DM_REEL.containsMatchIn(pathOf(url)) &&
-                !pathOf(url).matches(Regex("^/reels/?([?#].*)?$"))
+            if (site == WebSite.INSTAGRAM && allowDmReel && fromDm && DM_REEL.containsMatchIn(path) &&
+                !REELS_FEED.matches(path)
             ) return Decision.Allow
             return Decision.Block(label)
         }
         if (onDomain(host, site.loginHosts)) return Decision.Allow
         return Decision.External
     }
+
+    /**
+     * Instagram's home feed can be swapped for the Following feed (people you follow, newest first)
+     * or Favorites. Returns the address to go to instead, or null to stay.
+     */
+    fun feedRedirect(site: WebSite, url: String, variant: String): String? {
+        if (site != WebSite.INSTAGRAM || variant == "home") return null
+        if (!onDomain(hostOf(url), site.hosts) || cleanPath(url) != "/") return null
+        if (url.contains("variant=")) return null
+        return "https://www.instagram.com/?variant=$variant"
+    }
 }
 
-/** Sleep mode: social apps are closed between bedtime and wake-up, every day. */
+/** Sleep mode: social apps are closed between bedtime and wake-up on the chosen nights. */
 object Sleep {
-    fun window(on: Boolean, start: Int, end: Int): Schedule? =
-        if (on) Schedule(true, start, end, Schedule.ALL_DAYS) else null
+    fun window(on: Boolean, start: Int, end: Int, days: Int = Schedule.ALL_DAYS): Schedule? =
+        if (on) Schedule(true, start, end, days) else null
 
     fun isSleeping(window: Schedule?, isoDay: Int, minuteOfDay: Int): Boolean =
         window != null && window.isBlockingAt(isoDay, minuteOfDay)
@@ -391,5 +455,12 @@ object Sleep {
         old == null -> false
         new == null -> true
         else -> new.weakerThan(old)
+    }
+
+    /** Minutes until bedtime tonight (or null if tonight isn't a sleep night or it has started). */
+    fun minutesToBedtime(window: Schedule?, isoDay: Int, minuteOfDay: Int): Int? {
+        if (window == null || !window.dayOn(isoDay)) return null
+        val left = window.startMin - minuteOfDay
+        return if (left > 0) left else null
     }
 }

@@ -91,30 +91,39 @@ object Notifier {
     private const val CHANNEL = "status"
     private const val ID_OFF = 1
 
+    private const val ID_SLEEP = 2
+
     /** Returns true if the notification was posted. */
-    fun blockerOff(ctx: Context): Boolean {
+    fun blockerOff(ctx: Context): Boolean =
+        post(ctx, ID_OFF, "ScrollStop is switched off", "Reels and Shorts aren't being blocked. Tap to turn it back on.")
+
+    fun sleepSoon(ctx: Context, minutes: Int): Boolean =
+        post(ctx, ID_SLEEP, "Sleep mode in $minutes min",
+            "Social apps close at bedtime. Wrap up and put the phone down soon.")
+
+    private fun post(ctx: Context, id: Int, title: String, text: String): Boolean {
         if (!ServiceState.notificationsAllowed(ctx)) return false
         val nm = ctx.getSystemService(NotificationManager::class.java)
         if (nm.getNotificationChannel(CHANNEL) == null) {
             nm.createNotificationChannel(
-                NotificationChannel(CHANNEL, "Blocker status", NotificationManager.IMPORTANCE_DEFAULT).apply {
-                    description = "Tells you when the blocker gets switched off"
+                NotificationChannel(CHANNEL, "Reminders", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                    description = "Bedtime heads-up, and a warning if the blocker gets switched off"
                 }
             )
         }
         val open = PendingIntent.getActivity(
-            ctx, 0, Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            ctx, id, Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val n = NotificationCompat.Builder(ctx, CHANNEL)
             .setSmallIcon(R.drawable.ic_notify)
-            .setContentTitle("ScrollStop is switched off")
-            .setContentText("Reels and Shorts aren't being blocked. Tap to turn it back on.")
+            .setContentTitle(title)
+            .setContentText(text)
             .setContentIntent(open)
             .setAutoCancel(true)
             .build()
         return try {
-            nm.notify(ID_OFF, n)
+            nm.notify(id, n)
             true
         } catch (e: SecurityException) {
             false

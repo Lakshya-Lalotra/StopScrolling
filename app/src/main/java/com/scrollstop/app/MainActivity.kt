@@ -60,6 +60,16 @@ class MainActivity : AppCompatActivity() {
 
     private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { render() }
 
+    private val askVpn = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        if (r.resultCode == RESULT_OK) {
+            prefs.adultFilter = true
+            FilterVpnService.start(this)
+        } else {
+            toast("The filter needs the VPN permission to work")
+        }
+        handler.postDelayed({ render() }, 600)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
@@ -103,6 +113,7 @@ class MainActivity : AppCompatActivity() {
     override fun onPause() {
         super.onPause()
         handler.removeCallbacks(ticker)
+        ScrollStopWidget.refresh(this)
     }
 
     /** Things that change which cards are shown; when they change the page is rebuilt. */
@@ -190,10 +201,16 @@ class MainActivity : AppCompatActivity() {
             Triple("Instagram", Ui.Btn.FILLED) { openWeb(WebSite.INSTAGRAM) },
             Triple("YouTube", Ui.Btn.FILLED) { openWeb(WebSite.YOUTUBE) },
         )
+        ui.buttonRow(web,
+            Triple("Facebook", Ui.Btn.TONAL) { openWeb(WebSite.FACEBOOK) },
+            Triple("X", Ui.Btn.TONAL) { openWeb(WebSite.X) },
+        )
+        ui.buttonRow(web,
+            Triple("Reddit", Ui.Btn.TONAL) { openWeb(WebSite.REDDIT) },
+            Triple("LinkedIn", Ui.Btn.TONAL) { openWeb(WebSite.LINKEDIN) },
+        )
         if (ShortcutManagerCompat.isRequestPinShortcutSupported(this)) {
-            ui.button(web, "Add them to your home screen", Ui.Btn.TEXT) {
-                for (site in WebSite.entries) ShortcutManagerCompat.requestPinShortcut(this, shortcut(site), null)
-            }
+            ui.button(web, "Add one to your home screen", Ui.Btn.TEXT) { pinDialog() }
         }
 
         // ---- today ----
@@ -267,8 +284,34 @@ class MainActivity : AppCompatActivity() {
                 "feeds you block, in Chrome, Firefox, Samsung Internet, Edge, Brave, Opera and more.",
             { prefs.blockBrowsers }, { prefs.blockBrowsers = it })
 
-        val inApp = ui.card(page, "Inside ScrollStop's Instagram & YouTube",
-            "Extra clean-up when you open them from ScrollStop's Home tab.")
+        val inApp = ui.card(page, "Inside ScrollStop's social apps",
+            "Extra clean-up for Instagram, YouTube, Facebook, X, Reddit and LinkedIn opened from ScrollStop.")
+        val feedNames = mapOf("home" to "Home (Instagram's mix)", "following" to "Following: people you follow, newest first",
+            "favorites" to "Favorites only")
+        val feedRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val feedTexts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        ui.text(feedTexts, "Instagram feed", com.google.android.material.R.style.TextAppearance_Material3_BodyLarge)
+        ui.text(feedTexts, feedNames[prefs.webIgFeed] ?: prefs.webIgFeed,
+            com.google.android.material.R.style.TextAppearance_Material3_BodySmall, muted = true)
+        feedRow.addView(feedTexts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        ui.button(feedRow, "Change", Ui.Btn.TONAL) {
+            val keys = feedNames.keys.toList()
+            MaterialAlertDialogBuilder(this)
+                .setTitle("Instagram feed")
+                .setSingleChoiceItems(keys.map { feedNames[it] }.toTypedArray(), keys.indexOf(prefs.webIgFeed)) { d, i ->
+                    if (keys[i] == "home" && prefs.webIgFeed != "home" && prefs.isLocked()) showLockedDialog()
+                    else prefs.webIgFeed = keys[i]
+                    d.dismiss()
+                    render()
+                }
+                .show()
+        }
+        inApp.addView(feedRow)
+        toggle(inApp, "Block Explore and Popular pages", "YouTube Explore, X Explore, Reddit Popular and All.",
+            { prefs.webBlockDiscover }, { prefs.webBlockDiscover = it })
         toggle(inApp, "Hide reels in the feed", "Reel posts are removed from your Instagram home feed.",
             { prefs.webHideFeedReels }, { prefs.webHideFeedReels = it })
         toggle(inApp, "Hide suggested posts", "Only posts from people you follow.",
@@ -277,6 +320,9 @@ class MainActivity : AppCompatActivity() {
             { prefs.webHideAds }, { prefs.webHideAds = it })
         toggle(inApp, "Instagram: messages only", "Hides the home feed too. Messages, search and profiles still work.",
             { prefs.webIgMessagesOnly }, { prefs.webIgMessagesOnly = it })
+        ui.small(inApp, "Got a link from a friend? Share it to ScrollStop to watch just that one. To make links " +
+            "always open in ScrollStop: App info → Open by default → Add links.").setPadding(0, ui.dp(6), 0, 0)
+        ui.button(inApp, "Open by default settings", Ui.Btn.TEXT) { openByDefaultSettings() }
 
         appsCard()
     }
@@ -548,6 +594,15 @@ class MainActivity : AppCompatActivity() {
         }
         if (!any) ui.body(apps, "Nothing yet today. 🎉", muted = true)
 
+        // ---- locked in: how much social time happened inside ScrollStop's focused apps ----
+        val totalSocial = appTimes.values.sum()
+        val inside = WebSite.entries.map { it.pkg }.distinct().sumOf { stats.get(Stats.webMs(it)) }
+        val locked = ui.card(page, "Locked in today", "Share of your social time spent in ScrollStop's feed-free apps.")
+        val pct = if (totalSocial > 0) (inside * 100 / totalSocial).toInt() else 0
+        val lockedNums = ui.stats(locked, listOf("locked in", "inside ScrollStop"))
+        lockedNums[0].text = "$pct%"
+        lockedNums[1].text = Fmt.duration(inside)
+
         // ---- all time ----
         val all = ui.card(page, "All time")
         val total = stats.get(Stats.BLOCKS, Stats.ALL)
@@ -578,6 +633,7 @@ class MainActivity : AppCompatActivity() {
         ui.header(page, "Settings", null)
         strictCard()
         sleepCard()
+        filterCard()
         scheduleCard()
 
         val bs = ui.card(page, "When something is blocked")
@@ -604,7 +660,7 @@ class MainActivity : AppCompatActivity() {
 
         val about = ui.card(page, "About")
         ui.body(about, "ScrollStop ${BuildConfig.VERSION_NAME}\nThe blocker works offline and never sends anything anywhere. " +
-            "Internet is only used by the built-in Instagram and YouTube to load those sites.",
+            "Internet is only used to load the social sites you open inside ScrollStop, and by the optional adult filter.",
             muted = true)
     }
 
@@ -763,6 +819,67 @@ class MainActivity : AppCompatActivity() {
             Triple("Bedtime ${Fmt.clock(prefs.sleepStart)}", Ui.Btn.OUTLINED) { pickSleepTime(true) },
             Triple("Wake ${Fmt.clock(prefs.sleepEnd)}", Ui.Btn.OUTLINED) { pickSleepTime(false) },
         )
+        val group = ChipGroup(this)
+        listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun").forEachIndexed { i, n ->
+            val chip = Chip(android.view.ContextThemeWrapper(this, R.style.ThemeOverlay_ScrollStop_FilterChip)).apply {
+                text = n
+                isCheckable = true
+                isChecked = prefs.sleepDays and (1 shl i) != 0
+            }
+            chip.setOnCheckedChangeListener { v, checked ->
+                val days = if (checked) prefs.sleepDays or (1 shl i) else prefs.sleepDays and (1 shl i).inv()
+                val new = Sleep.window(true, prefs.sleepStart, prefs.sleepEnd, days)
+                if (prefs.isLocked() && Sleep.weakens(prefs.sleepWindow(), new)) {
+                    v.isChecked = !checked
+                    showLockedDialog()
+                } else prefs.sleepDays = days
+            }
+            group.addView(chip)
+        }
+        c.addView(group)
+        ui.small(c, "Nights start on the days ticked above.")
+        val reminders = listOf(0, 15, 30, 60)
+        ui.button(c, "Heads-up before bedtime: " +
+            if (prefs.sleepReminder == 0) "off" else "${prefs.sleepReminder} min", Ui.Btn.TEXT) {
+            MaterialAlertDialogBuilder(this)
+                .setTitle("Heads-up before bedtime")
+                .setItems(arrayOf("Off", "15 minutes before", "30 minutes before", "1 hour before")) { _, i ->
+                    prefs.sleepReminder = reminders[i]
+                    render()
+                }
+                .show()
+        }
+    }
+
+    // ---- adult content filter ----
+
+    private fun filterCard() {
+        val c = ui.card(page, "Adult content filter",
+            "Blocks adult and harmful websites in every app and browser, using Cloudflare's free family DNS " +
+                "(1.1.1.3). Works through a VPN that only carries web address lookups: the rest of your " +
+                "internet goes out as normal, and nothing is logged.")
+        toggle(c, "Block adult content", null, { prefs.adultFilter }, { on ->
+            if (on) {
+                val ask = android.net.VpnService.prepare(this)
+                if (ask == null) {
+                    prefs.adultFilter = true
+                    FilterVpnService.start(this)
+                    handler.postDelayed({ render() }, 600)
+                } else {
+                    askVpn.launch(ask)
+                }
+            } else {
+                prefs.adultFilter = false
+                FilterVpnService.stop(this)
+                handler.postDelayed({ render() }, 600)
+            }
+        })
+        if (prefs.adultFilter) {
+            ui.small(c, if (FilterVpnService.running) "🟢 Filter is running."
+            else "🟠 Filter isn't running. Another VPN may have taken over: switch it off and on again.")
+        }
+        ui.small(c, "Only one VPN can run at a time. If sites still load, set Settings → Network → Private DNS to " +
+            "Off or Automatic.").setPadding(0, ui.dp(4), 0, 0)
     }
 
     private fun pickSleepTime(bedtime: Boolean) {
@@ -770,7 +887,8 @@ class MainActivity : AppCompatActivity() {
         TimePickerDialog(this, { _, h, min ->
             val v = h * 60 + min
             val old = prefs.sleepWindow()
-            val new = Sleep.window(true, if (bedtime) v else prefs.sleepStart, if (bedtime) prefs.sleepEnd else v)
+            val new = Sleep.window(true, if (bedtime) v else prefs.sleepStart, if (bedtime) prefs.sleepEnd else v,
+                prefs.sleepDays)
             if (prefs.isLocked() && Sleep.weakens(old, new)) showLockedDialog()
             else {
                 if (bedtime) prefs.sleepStart = v else prefs.sleepEnd = v
@@ -789,9 +907,37 @@ class MainActivity : AppCompatActivity() {
         startActivity(WebAppActivity.intent(this, site))
     }
 
+    private fun shortcutLabel(site: WebSite) = when (site) {
+        WebSite.INSTAGRAM, WebSite.FACEBOOK -> "${site.title} (no Reels)"
+        WebSite.YOUTUBE -> "YouTube (no Shorts)"
+        else -> "${site.title} (focus)"
+    }
+
+    private fun pinDialog() {
+        val sites = WebSite.entries
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Add to home screen")
+            .setItems(sites.map { shortcutLabel(it) }.toTypedArray()) { _, i ->
+                ShortcutManagerCompat.requestPinShortcut(this, shortcut(sites[i]), null)
+            }
+            .show()
+    }
+
+    private fun openByDefaultSettings() {
+        val i = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            Intent(android.provider.Settings.ACTION_APP_OPEN_BY_DEFAULT_SETTINGS,
+                android.net.Uri.parse("package:$packageName"))
+        } else ServiceState.appInfo(this)
+        if (!open(i)) open(ServiceState.appInfo(this))
+    }
+
     private fun shortcut(site: WebSite): ShortcutInfoCompat {
-        val label = if (site == WebSite.INSTAGRAM) "Instagram (no Reels)" else "YouTube (no Shorts)"
-        val icon = if (site == WebSite.INSTAGRAM) R.mipmap.ic_web_instagram else R.mipmap.ic_web_youtube
+        val label = shortcutLabel(site)
+        val icon = when (site) {
+            WebSite.INSTAGRAM -> R.mipmap.ic_web_instagram
+            WebSite.YOUTUBE -> R.mipmap.ic_web_youtube
+            else -> R.mipmap.ic_launcher
+        }
         return ShortcutInfoCompat.Builder(this, "web_${site.key}")
             .setShortLabel(label)
             .setLongLabel(label)
@@ -802,7 +948,9 @@ class MainActivity : AppCompatActivity() {
 
     /** Long-press ScrollStop's icon to jump straight into Instagram or YouTube without the feeds. */
     private fun publishShortcuts() {
-        runCatching { ShortcutManagerCompat.setDynamicShortcuts(this, WebSite.entries.map { shortcut(it) }) }
+        runCatching {
+            ShortcutManagerCompat.setDynamicShortcuts(this, WebSite.entries.take(4).map { shortcut(it) })
+        }
     }
 
     // ---- schedule ----
@@ -928,7 +1076,7 @@ class MainActivity : AppCompatActivity() {
         @Suppress("DEPRECATION")
         packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
     } catch (e: Exception) {
-        pkg
+        WebSite.entries.firstOrNull { it.pkg == pkg }?.title ?: pkg
     }
 
     private fun appIcon(pkg: String): Drawable? = try {

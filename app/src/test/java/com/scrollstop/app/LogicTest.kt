@@ -272,3 +272,114 @@ class SleepTest {
         assertFalse(Sleep.weakens(null, w))                                 // switching it on
     }
 }
+
+class MoreWebRulesTest {
+    private val cfg = UrlRules.Config()
+
+    @Test fun sharedLinkPlaysJustThatOne() {
+        val shared = WebRules.cleanPath("https://www.instagram.com/reel/AbC/?igsh=xyz")
+        assertEquals("/reel/AbC", shared)
+        assertEquals(WebRules.Decision.Allow, WebRules.decide(WebSite.INSTAGRAM,
+            "https://www.instagram.com/reel/AbC/", null, cfg, false, sharedPath = shared))
+        assertEquals(WebRules.Decision.Block("Instagram Reels"), WebRules.decide(WebSite.INSTAGRAM,
+            "https://www.instagram.com/reel/Other/", null, cfg, false, sharedPath = shared))
+        val short = WebRules.cleanPath("https://youtube.com/shorts/q1w2e3?si=abc")
+        assertEquals(WebRules.Decision.Allow, WebRules.decide(WebSite.YOUTUBE,
+            "https://m.youtube.com/shorts/q1w2e3", null, cfg, false, sharedPath = short))
+        assertEquals(WebRules.Decision.Block("YouTube Shorts"), WebRules.decide(WebSite.YOUTUBE,
+            "https://m.youtube.com/shorts/next1", null, cfg, false, sharedPath = short))
+    }
+
+    @Test fun discoverPages() {
+        assertEquals(WebRules.Decision.Block("Reddit Popular"),
+            WebRules.decide(WebSite.REDDIT, "https://www.reddit.com/r/popular/", null, cfg, false, blockDiscover = true))
+        assertEquals(WebRules.Decision.Allow,
+            WebRules.decide(WebSite.REDDIT, "https://www.reddit.com/r/popular/", null, cfg, false, blockDiscover = false))
+        assertEquals(WebRules.Decision.Allow,
+            WebRules.decide(WebSite.REDDIT, "https://www.reddit.com/r/android/", null, cfg, false, blockDiscover = true))
+        assertEquals(WebRules.Decision.Block("X Explore"),
+            WebRules.decide(WebSite.X, "https://x.com/explore", null, cfg, false, blockDiscover = true))
+        assertEquals(WebRules.Decision.Allow,
+            WebRules.decide(WebSite.X, "https://x.com/explorer_guy", null, cfg, false, blockDiscover = true))
+        assertEquals(WebRules.Decision.Block("Facebook Reels"),
+            WebRules.decide(WebSite.FACEBOOK, "https://m.facebook.com/reel/123", null, cfg, false))
+        assertEquals(WebRules.Decision.External,
+            WebRules.decide(WebSite.LINKEDIN, "https://www.instagram.com/", null, cfg, false))
+    }
+
+    @Test fun followingFeed() {
+        assertEquals("https://www.instagram.com/?variant=following",
+            WebRules.feedRedirect(WebSite.INSTAGRAM, "https://www.instagram.com/", "following"))
+        assertNull(WebRules.feedRedirect(WebSite.INSTAGRAM, "https://www.instagram.com/?variant=following", "following"))
+        assertNull(WebRules.feedRedirect(WebSite.INSTAGRAM, "https://www.instagram.com/direct/inbox/", "following"))
+        assertNull(WebRules.feedRedirect(WebSite.INSTAGRAM, "https://www.instagram.com/", "home"))
+        assertNull(WebRules.feedRedirect(WebSite.YOUTUBE, "https://m.youtube.com/", "following"))
+    }
+
+    @Test fun sharedText() {
+        assertEquals("https://www.instagram.com/reel/AbC/",
+            WebRules.firstUrl("Look at this! https://www.instagram.com/reel/AbC/ so funny"))
+        assertNull(WebRules.firstUrl("no link here"))
+        assertEquals(WebSite.YOUTUBE, WebSite.forUrl("https://youtu.be/abc"))
+        assertEquals(WebSite.X, WebSite.forUrl("https://twitter.com/someone/status/1"))
+        assertNull(WebSite.forUrl("https://example.com/"))
+    }
+}
+
+class SleepDaysTest {
+    @Test fun daysAndHeadsUp() {
+        val weeknights = Sleep.window(true, 23 * 60, 7 * 60, 0b0011111) // Mon-Fri nights
+        assertTrue(Sleep.isSleeping(weeknights, 5, 23 * 60 + 10))   // Friday night
+        assertTrue(Sleep.isSleeping(weeknights, 6, 6 * 60))         // early Saturday, from Friday night
+        assertFalse(Sleep.isSleeping(weeknights, 6, 23 * 60 + 10))  // Saturday night is free
+        assertEquals(30, Sleep.minutesToBedtime(weeknights, 1, 22 * 60 + 30))
+        assertNull(Sleep.minutesToBedtime(weeknights, 6, 22 * 60 + 30))
+        assertNull(Sleep.minutesToBedtime(weeknights, 1, 23 * 60 + 5))
+    }
+}
+
+class DnsPacketTest {
+    /** A DNS question for example.com from 10.111.222.1:40000 to 10.111.222.2:53. */
+    private fun query(): ByteArray {
+        val dns = byteArrayOf(0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0,
+            7, 'e'.code.toByte(), 'x'.code.toByte(), 'a'.code.toByte(), 'm'.code.toByte(), 'p'.code.toByte(),
+            'l'.code.toByte(), 'e'.code.toByte(), 3, 'c'.code.toByte(), 'o'.code.toByte(), 'm'.code.toByte(), 0,
+            0, 1, 0, 1)
+        val total = 28 + dns.size
+        val p = ByteArray(total)
+        p[0] = 0x45; p[2] = (total shr 8).toByte(); p[3] = total.toByte(); p[8] = 64; p[9] = 17
+        byteArrayOf(10, 111, 222.toByte(), 1).copyInto(p, 12)
+        byteArrayOf(10, 111, 222.toByte(), 2).copyInto(p, 16)
+        val c = DnsPacket.checksum(p, 0, 20); p[10] = (c shr 8).toByte(); p[11] = c.toByte()
+        p[20] = (40000 shr 8).toByte(); p[21] = 40000.toByte(); p[23] = 53
+        p[24] = ((8 + dns.size) shr 8).toByte(); p[25] = (8 + dns.size).toByte()
+        dns.copyInto(p, 28)
+        return p
+    }
+
+    @Test fun parsesQuery() {
+        val p = query()
+        val q = DnsPacket.parse(p, p.size)!!
+        assertEquals(40000, q.srcPort)
+        assertEquals(53, q.dstPort)
+        assertEquals(29, q.payload.size)
+        assertEquals(0x12, q.payload[0].toInt())
+        assertNull(DnsPacket.parse(p, 20))
+        val tcp = p.copyOf().also { it[9] = 6 }
+        assertNull(DnsPacket.parse(tcp, tcp.size))
+    }
+
+    @Test fun buildsAnswerBackToTheAsker() {
+        val p = query()
+        val q = DnsPacket.parse(p, p.size)!!
+        val answer = ByteArray(45) { it.toByte() }
+        val r = DnsPacket.response(q, answer, answer.size)
+        assertEquals(28 + 45, r.size)
+        assertEquals(0, DnsPacket.checksum(r, 0, 20)) // a valid header sums to zero
+        assertEquals(listOf<Byte>(10, 111, 222.toByte(), 2), r.copyOfRange(12, 16).toList()) // from the fake DNS
+        assertEquals(listOf<Byte>(10, 111, 222.toByte(), 1), r.copyOfRange(16, 20).toList()) // to the asker
+        assertEquals(53, ((r[20].toInt() and 0xFF) shl 8) or (r[21].toInt() and 0xFF))
+        assertEquals(40000, ((r[22].toInt() and 0xFF) shl 8) or (r[23].toInt() and 0xFF))
+        assertEquals(answer.toList(), r.copyOfRange(28, r.size).toList())
+    }
+}

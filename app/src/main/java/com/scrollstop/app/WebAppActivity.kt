@@ -40,9 +40,12 @@ import com.google.android.material.progressindicator.LinearProgressIndicator
 import org.json.JSONObject
 
 /**
- * Instagram / YouTube inside ScrollStop, like Sociallite's focused browser: the website is shown
- * with the Reels / Explore / Shorts buttons removed completely, reels, ads and suggested posts taken
- * out of the feed, and the blocked pages can't be opened.
+ * Instagram, YouTube, Facebook, X, Reddit and LinkedIn inside ScrollStop, like Sociallite's focused
+ * browser: the website is shown with the Reels / Explore / Shorts buttons removed completely, reels,
+ * ads and suggested posts taken out of the feed, and the blocked pages can't be opened.
+ *
+ * Links shared to ScrollStop (or opened with it) show just that post or video: watching the one a
+ * friend sent is fine, swiping on to the next one isn't.
  */
 class WebAppActivity : AppCompatActivity() {
 
@@ -71,11 +74,14 @@ class WebAppActivity : AppCompatActivity() {
     private var hiddenSuggested = 0
     private var hiddenReels = 0
     private var closed = false
+    /** Path of a link that was shared or opened in ScrollStop; that one item is allowed. */
+    private var sharedPath: String? = null
 
     private val handler = Handler(Looper.getMainLooper())
     private val ticker = object : Runnable {
         override fun run() {
             stats.add(Stats.appMs(site.pkg), 1_000)
+            stats.add(Stats.webMs(site.pkg), 1_000)
             if (checkClosed()) return
             updateInfo()
             handler.postDelayed(this, 1_000)
@@ -92,13 +98,29 @@ class WebAppActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         prefs = Prefs.get(this)
         stats = Stats.get(this)
-        site = WebSite.byKey(intent.getStringExtra(EXTRA_SITE) ?: intent.data?.host) ?: WebSite.INSTAGRAM
+        val incoming = when (intent.action) {
+            Intent.ACTION_SEND -> WebRules.firstUrl(intent.getStringExtra(Intent.EXTRA_TEXT))
+            Intent.ACTION_VIEW -> intent.data?.takeIf { it.scheme == "https" || it.scheme == "http" }?.toString()
+            else -> null
+        }
+        val fromLink = incoming?.let { WebSite.forUrl(it) }
+        if (incoming != null && fromLink == null) {
+            Toast.makeText(this, "ScrollStop can open Instagram, YouTube, Facebook, X, Reddit and LinkedIn links",
+                Toast.LENGTH_LONG).show()
+            finish()
+            return
+        }
+        site = fromLink ?: WebSite.byKey(intent.getStringExtra(EXTRA_SITE) ?: intent.data?.host) ?: WebSite.INSTAGRAM
+        if (fromLink != null) sharedPath = WebRules.cleanPath(incoming!!)
         title = site.title
         buildViews()
         if (checkClosed()) return
         setupWeb()
         if (savedInstanceState != null) web.restoreState(savedInstanceState)
-        if (web.url == null) web.loadUrl(site.home)
+        if (web.url == null) {
+            val start = incoming?.takeIf { fromLink != null } ?: site.home
+            web.loadUrl(WebRules.feedRedirect(site, start, prefs.webIgFeed) ?: start)
+        }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 when {
@@ -254,10 +276,23 @@ class WebAppActivity : AppCompatActivity() {
 
     /** Returns true if the navigation was stopped. */
     private fun handleNavigation(url: String, fromHistory: Boolean): Boolean {
-        val cfg = if (prefs.isActiveNow()) prefs.urlConfig() else UrlRules.Config(
+        val active = prefs.isActiveNow()
+        val cfg = if (active) prefs.urlConfig() else UrlRules.Config(
             false, false, false, false, false, false, false, false
         )
-        return when (val d = WebRules.decide(site, url, lastUrl, cfg, prefs.allowInstagramDm)) {
+        WebRules.feedRedirect(site, url, prefs.webIgFeed)?.let { other ->
+            handler.post { web.loadUrl(other) }
+            return true
+        }
+        val d = WebRules.decide(
+            site, url, lastUrl, cfg, prefs.allowInstagramDm,
+            blockDiscover = active && prefs.webBlockDiscover, sharedPath = sharedPath,
+        )
+        // Once you leave the shared post, it's no longer special.
+        if (sharedPath != null && d is WebRules.Decision.Allow && WebRules.cleanPath(url) != sharedPath &&
+            WebSite.forUrl(url) == site
+        ) sharedPath = null
+        return when (d) {
             WebRules.Decision.Allow -> false
             WebRules.Decision.Ignore -> true
             WebRules.Decision.External -> {
@@ -270,7 +305,7 @@ class WebAppActivity : AppCompatActivity() {
                 true
             }
             is WebRules.Decision.Block -> {
-                stats.recordBlock(site.platform.key)
+                stats.recordBlock(site.statKey)
                 Toast.makeText(this, "${d.label} blocked", Toast.LENGTH_SHORT).show()
                 if (fromHistory) goBackOrHome()
                 true
@@ -287,26 +322,78 @@ class WebAppActivity : AppCompatActivity() {
 
     private fun focusScript(): String {
         val active = prefs.isActiveNow()
+        val ads = prefs.webHideAds
+        val suggested = prefs.webHideSuggested
+        val discover = active && prefs.webBlockDiscover
         val cfg = JSONObject()
+        val raw: Int
         when (site) {
             WebSite.INSTAGRAM -> {
+                raw = R.raw.focus_instagram
                 val reels = active && prefs.blocked(Platform.INSTAGRAM)
                 cfg.put("reels", reels)
                 cfg.put("explore", active && prefs.blockIgExplore)
                 cfg.put("feedReels", reels && prefs.webHideFeedReels)
-                cfg.put("ads", prefs.webHideAds)
-                cfg.put("suggested", prefs.webHideSuggested)
+                cfg.put("ads", ads)
+                cfg.put("suggested", suggested)
                 cfg.put("home", active && prefs.webIgMessagesOnly)
             }
             WebSite.YOUTUBE -> {
+                raw = R.raw.focus_youtube
                 cfg.put("shorts", active && prefs.blocked(Platform.YOUTUBE))
-                cfg.put("ads", prefs.webHideAds)
+                cfg.put("ads", ads)
                 cfg.put("home", active && prefs.blockYtHome)
             }
+            else -> {
+                raw = R.raw.focus_generic
+                val g = genericConfig(site, active, discover)
+                cfg.put("hide", org.json.JSONArray(g.hide))
+                cfg.put("item", g.item)
+                if (ads) cfg.put("ad", g.ad)
+                if (suggested) cfg.put("suggested", g.suggested)
+            }
         }
-        val raw = if (site == WebSite.INSTAGRAM) R.raw.focus_instagram else R.raw.focus_youtube
         val body = resources.openRawResource(raw).bufferedReader().use { it.readText() }
         return "var SS_CFG = $cfg;\n$body"
+    }
+
+    private class Generic(val hide: List<String>, val item: String, val ad: String, val suggested: String)
+
+    /** What to take out of Facebook, X, Reddit and LinkedIn. */
+    private fun genericConfig(site: WebSite, active: Boolean, discover: Boolean): Generic = when (site) {
+        WebSite.FACEBOOK -> Generic(
+            hide = buildList {
+                if (active && prefs.blocked(Platform.FACEBOOK)) {
+                    addAll(listOf("a[href^=\"/reel\"]", "a[href*=\"facebook.com/reel\"]", "a[aria-label^=\"Reels\"]"))
+                }
+                if (active && prefs.blockFbWatch) addAll(listOf("a[href^=\"/watch\"]", "a[aria-label^=\"Video\"]"))
+                if (discover) add("a[href^=\"/gaming\"]")
+            },
+            item = "article, div[role=\"article\"], div[data-tracking-duration-id]",
+            ad = "^\\s*(Sponsored|Sponsorisé|Gesponsert|Patrocinado)\\s*$",
+            suggested = "^\\s*(Suggested for you|Reels and short videos|Reels|People you may know|Follow)\\s*$",
+        )
+        WebSite.X -> Generic(
+            hide = if (discover) listOf("a[href=\"/explore\"]", "a[data-testid=\"AppTabBar_Explore_Link\"]") else emptyList(),
+            item = "div[data-testid=\"cellInnerDiv\"]",
+            ad = "^\\s*(Ad|Promoted)\\s*$",
+            suggested = "^\\s*(Who to follow|You might like|Trending now|What’s happening|What's happening)\\s*$",
+        )
+        WebSite.REDDIT -> Generic(
+            hide = buildList {
+                if (prefs.webHideAds) addAll(listOf("shreddit-ad-post", "shreddit-comments-page-ad", "shreddit-dynamic-ad-link"))
+                if (discover) addAll(listOf("a[href^=\"/r/popular\"]", "a[href^=\"/r/all\"]", "a[href^=\"/explore\"]"))
+            },
+            item = "shreddit-post, article",
+            ad = "^\\s*Promoted\\s*$",
+            suggested = "^\\s*(Suggested for you|Because you visited.*|Popular on Reddit)\\s*$",
+        )
+        else -> Generic(
+            hide = emptyList(),
+            item = "div.feed-shared-update-v2, div[data-id^=\"urn:li:activity\"], div[data-urn^=\"urn:li:activity\"]",
+            ad = "^\\s*Promoted( by .*)?\\s*$",
+            suggested = "^\\s*(Suggested|Recommended for you)\\s*$",
+        )
     }
 
     /** Called from the page script when it hides something. */
@@ -394,6 +481,7 @@ class WebAppActivity : AppCompatActivity() {
         handler.removeCallbacks(ticker)
         if (::web.isInitialized) web.onPause()
         stats.flush()
+        ScrollStopWidget.refresh(this)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {

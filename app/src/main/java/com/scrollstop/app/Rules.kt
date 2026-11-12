@@ -215,7 +215,7 @@ object Rules {
 
     private val DANGER = Regex(
         "(?i)^(uninstall|force stop|clear (storage|data|cache)|disable|deactivate|stop|" +
-            "turn off|use .*|.*shortcut|app info)$"
+            "turn off|use .*|.*shortcut|app info|disconnect|forget( vpn)?|always-on vpn)$"
     )
 
     /**
@@ -223,7 +223,8 @@ object Rules {
      * its App info page, or the uninstall dialog.
      */
     fun isProtectedSettingsScreen(pkg: String, root: AccessibilityNodeInfo, appLabel: String, screen: Rect): Boolean {
-        val installer = pkg.contains("packageinstaller")
+        // Dialogs (uninstall, VPN disconnect) sit mid-screen, so any mention of the app counts there.
+        val installer = pkg.contains("packageinstaller") || pkg == "com.android.vpndialogs"
         var nameNearTop = false
         var nameAnywhere = false
         var danger = false
