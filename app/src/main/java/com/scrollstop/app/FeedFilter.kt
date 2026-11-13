@@ -10,7 +10,16 @@ object FeedLabels {
         "प्रायोजित पोस्ट", "স্পনসর করা", "ஸ்பான்சர் செய்யப்பட்டது", "ప్రాయోజితం", "スポンサー", "광고", "赞助内容", "贊助",
         "được tài trợ", "bersponsor", "disponsori", "ممول", "χορηγούμενη", "sponsrad", "sponsoreret",
     )
-    private val AD_STARTS = listOf("paid partnership", "sponsored ·", "sponsored •")
+    private val AD_STARTS = listOf("paid partnership", "sponsored ·", "sponsored •", "ad ·", "ad •")
+    /** Instagram's newer label is just "Ad" (and in Hindi "विज्ञापन"). */
+    private val AD_SHORT = setOf("ad", "ads", "विज्ञापन")
+    /** The coloured button bar under an ad's photo. Ordinary posts don't have one. */
+    private val AD_BUTTONS = setOf(
+        "order now", "shop now", "buy now", "learn more", "install now", "install", "download", "sign up",
+        "book now", "apply now", "get offer", "get quote", "contact us", "send message", "send whatsapp message",
+        "watch more", "listen now", "play game", "use app", "see menu", "get directions", "donate now", "call now",
+        "get started", "subscribe", "open link", "visit website", "abhi order karein", "अभी ऑर्डर करें", "और जानें",
+    )
     private val SUGGESTED = setOf(
         "suggested for you", "suggested posts", "suggested post", "suggested reels", "suggested threads",
         "suggested", "recommended for you", "popular on instagram", "based on your activity",
@@ -22,8 +31,41 @@ object FeedLabels {
 
     fun isAd(text: String?): Boolean {
         val t = norm(text ?: return false)
-        return t in AD || AD_STARTS.any { t.startsWith(it) }
+        return t in AD || t in AD_SHORT || AD_STARTS.any { t.startsWith(it) }
     }
+
+    /** Options in a post's ⋯ menu that make Instagram itself remove the post from the feed. */
+    private val NOT_INTERESTED = setOf(
+        "not interested", "दिलचस्पी नहीं है", "रुचि नहीं है", "no me interesa", "não tenho interesse", "pas intéressé",
+        "pas intéressé(e)", "nicht interessiert", "non mi interessa", "غير مهتم", "tidak tertarik", "ilgilenmiyorum",
+    )
+    private val HIDE_AD = setOf(
+        "hide ad", "विज्ञापन छुपाएँ", "विज्ञापन छिपाएँ", "विज्ञापन छुपाएं", "ocultar anuncio", "ocultar anúncio",
+        "masquer la publicité", "werbeanzeige verbergen", "nascondi inserzione", "إخفاء الإعلان", "sembunyikan iklan",
+        "reklamı gizle",
+    )
+    /** After "Hide ad" Instagram may ask why; any of these answers is fine. */
+    private val AD_REASONS = setOf(
+        "it's irrelevant", "it’s irrelevant", "not relevant", "irrelevant", "it's repetitive", "it’s repetitive",
+        "i keep seeing this", "seen it too many times",
+    )
+    /** Things that are only in a post's ⋯ menu: if we see them, the menu is open. */
+    private val MENU_HINTS = setOf(
+        "about this account", "why you're seeing this post", "why you’re seeing this post", "why you're seeing this ad",
+        "why you’re seeing this ad", "report", "report ad", "unfollow", "add to favorites", "copy link", "interested",
+    )
+
+    fun isRemoveOption(text: String?, kind: FeedKind): Boolean {
+        val t = norm(text ?: return false)
+        return t in NOT_INTERESTED || (kind == FeedKind.AD && t in HIDE_AD)
+    }
+
+    fun isAdReason(text: String?): Boolean = text != null && norm(text) in AD_REASONS
+
+    fun isMenuHint(text: String?): Boolean = text != null && norm(text) in MENU_HINTS
+
+    /** A call-to-action button such as "Order now", which only ads carry. */
+    fun isAdButton(text: String?): Boolean = text != null && norm(text) in AD_BUTTONS
 
     fun isSuggested(text: String?): Boolean {
         val t = norm(text ?: return false)

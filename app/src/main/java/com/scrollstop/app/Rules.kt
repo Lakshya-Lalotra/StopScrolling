@@ -31,7 +31,18 @@ data class Analysis(
     /** Instagram feed: scroll down this far to get past a hidden post, and where the feed list is. */
     val feedSkip: Int? = null,
     val feedList: Rect? = null,
+    val feedNode: AccessibilityNodeInfo? = null,
+    /** Hidden Instagram posts whose ⋯ button is on screen: Instagram can be asked to remove them. */
+    val feedTargets: List<FeedTarget> = emptyList(),
+    /** A reel opened from a DM (the reply box is showing), and who posted the reel on screen. */
+    val reelFromDm: Boolean = false,
+    val reelAuthor: String? = null,
+    /** Facebook: the "Hide" / ✕ button of a sponsored or suggested post on screen. */
+    val dismissButton: AccessibilityNodeInfo? = null,
 )
+
+/** A post to remove through Instagram's own ⋯ menu. */
+class FeedTarget(val kind: FeedKind, val account: String, val more: AccessibilityNodeInfo)
 
 /**
  * Detection rules for each app. Apps rename their internal view IDs from time to time;
@@ -44,6 +55,7 @@ object Rules {
     private val IG_REEL_IDS = listOf(
         "clips_viewer_view_pager",
         "clips_viewer_container",
+        "clips_viewer_video_layout",
         "clips_video_container",
         "root_clips_layout",
         "clips_ufi_component",
@@ -76,6 +88,7 @@ object Rules {
         "reel_time_bar",
         "shorts_container",
         "reel_watch_fragment_root",
+        "shorts_player_container",
     )
     private val YT_SHORTS_PAGER_IDS = setOf("reel_recycler")
     private val YT_PLAYER_IDS = listOf("watch_player", "player_view", "watch_while_layout", "mini_player")
@@ -142,29 +155,32 @@ object Rules {
         // Ads and suggested posts in the home feed: covered and skipped.
         var skip: Int? = null
         var listRect: Rect? = null
+        var feedNode: AccessibilityNodeInfo? = null
+        var targets: List<FeedTarget> = emptyList()
         if (!reels && (prefs.webHideAds || prefs.webHideSuggested)) {
             val list = igFeedList(root, pkg, screen)
             if (list != null) {
                 val lr = bounds(list)
-                val rows = (0 until list.childCount).mapNotNull { i ->
-                    try {
-                        list.getChild(i)?.takeIf { it.isVisibleToUser }?.let { igRow(it) }
-                    } catch (e: RuntimeException) {
-                        null
-                    }
-                }
+                val infos = feedRowNodes(list, lr).map { igRow(it) }
+                val rows = infos.map { it.first }
                 // Only trust lists that look like the feed (they have post headers).
                 if (rows.any { it.header != null } || visible(root, pkg, "feed_tab").any { it.isSelected }) {
                     val plan = FeedPlan.plan(rows, lr.top, lr.bottom, feed, prefs.webHideAds, prefs.webHideSuggested)
                     for (c in plan.covers) {
                         hides += Hide(
-                            Rect(lr.left, c.top, lr.right, c.bottom), c.kind.label, scrolls = true, clip = Rect(lr),
+                            Rect(lr.left, c.top, lr.right, c.bottom), null, scrolls = true, clip = Rect(lr),
                             sample = if (c.headerTop != null && c.headerBottom != null)
                                 Rect(lr.left, c.headerTop, lr.right, c.headerBottom) else null,
                         )
                     }
                     skip = plan.skipBy
                     listRect = lr
+                    feedNode = list
+                    val headers = infos.filter { it.first.header != null && it.second != null }.associateBy { it.first.top }
+                    targets = plan.covers.mapNotNull { c ->
+                        val h = c.headerTop?.let { headers[it] } ?: return@mapNotNull null
+                        FeedTarget(c.kind, h.first.header.orEmpty(), h.second!!)
+                    }
                 }
             }
         }
@@ -176,7 +192,36 @@ object Rules {
             dmThread = anyVisibleId(root, pkg, IG_DM_IDS),
             feedSkip = skip,
             feedList = listRect,
+            feedNode = feedNode,
+            feedTargets = targets,
+            reelFromDm = reels && anyVisibleId(root, pkg, listOf("reel_viewer_message_composer")),
+            reelAuthor = if (reels) visible(root, pkg, "clips_author_username").firstOrNull()?.text?.toString() else null,
         )
+    }
+
+    private fun visibleChildren(n: AccessibilityNodeInfo): List<AccessibilityNodeInfo> =
+        (0 until n.childCount).mapNotNull { i ->
+            try {
+                n.getChild(i)?.takeIf { it.isVisibleToUser && !bounds(it).isEmpty }
+            } catch (e: RuntimeException) {
+                null
+            }
+        }
+
+    /**
+     * The feed's rows, one per post part. If the list holds a single wrapper filling the screen (so one
+     * "row" would be the whole feed), look inside it instead: covering it would blank the screen.
+     */
+    private fun feedRowNodes(list: AccessibilityNodeInfo, lr: Rect): List<AccessibilityNodeInfo> {
+        var kids = visibleChildren(list)
+        repeat(4) {
+            val only = kids.singleOrNull() ?: return kids
+            if (bounds(only).height() < lr.height() * 0.85) return kids
+            val inner = visibleChildren(only)
+            if (inner.size < 2) return kids
+            kids = inner
+        }
+        return kids
     }
 
     private val IG_HEADER_IDS = setOf(
@@ -184,6 +229,7 @@ object Rules {
         "row_feed_photo_profile_metalabel",
     )
     private val IG_NAME_IDS = setOf("row_feed_photo_profile_name")
+    private val IG_MORE_IDS = setOf("feed_more_button_stub", "row_feed_button_more", "feed_more_button")
     private val PROFILE_PIC = Regex("(?i).*profile (picture|photo).*")
     private val MORE_BUTTON = Regex("(?i)^(more( options| actions.*)?|options)$")
 
@@ -204,12 +250,13 @@ object Rules {
     }
 
     /** Reads one row of the feed: is it a post header, does it say Sponsored or Suggested, is there a Follow button. */
-    private fun igRow(row: AccessibilityNodeInfo): FeedRow {
+    private fun igRow(row: AccessibilityNodeInfo): Pair<FeedRow, AccessibilityNodeInfo?> {
         var header = false
         var name: String? = null
         var firstText: String? = null
         var pic = false
         var more = false
+        var moreNode: AccessibilityNodeInfo? = null
         var ad = false
         var suggested = false
         var follow = false
@@ -222,14 +269,19 @@ object Rules {
             if (l.isEmpty()) return@walk
             if (firstText == null && text.isNotEmpty()) firstText = text.substringBefore('\n').trim()
             if (FeedLabels.isAd(text) || FeedLabels.isAd(n.contentDescription?.toString())) ad = true
+            if (FeedLabels.isAdButton(text) && (n.isClickable || n.parent?.isClickable == true)) ad = true
             if (FeedLabels.isSuggested(l)) suggested = true
             if (l.equals("Follow", ignoreCase = true) && (n.isClickable || n.parent?.isClickable == true)) follow = true
             if (PROFILE_PIC.matches(l)) pic = true
-            if (MORE_BUTTON.matches(l)) more = true
+            if (MORE_BUTTON.matches(l) || id in IG_MORE_IDS) {
+                more = true
+                if (moreNode == null) moreNode = n
+            }
         }
         if (!header && pic && more) header = true
         val b = bounds(row)
-        return FeedRow(b.top, b.bottom, if (header) (name ?: firstText ?: "") else null, ad, suggested, follow && header)
+        return FeedRow(b.top, b.bottom, if (header) (name ?: firstText ?: "") else null, ad, suggested, follow && header) to
+            moreNode?.takeIf { header }
     }
 
     private fun youtube(pkg: String, root: AccessibilityNodeInfo, prefs: Prefs, screen: Rect): Analysis {
@@ -295,7 +347,42 @@ object Rules {
             }
         }
         if (hides.size > 2) hides.subList(2, hides.size).clear() // never cover more than the tab itself
-        return Analysis(shortVideo = reels, closeNow = close, hides = hides.filter { it.rect.height() < screen.height() / 5 })
+        val dismiss = if (prefs.webHideAds || prefs.webHideSuggested) facebookDismiss(root, screen, prefs) else null
+        return Analysis(shortVideo = reels, closeNow = close, hides = hides.filter { it.rect.height() < screen.height() / 5 },
+            dismissButton = dismiss)
+    }
+
+    private val FB_TRIGGERS_SUGGESTED = setOf("follow", "join", "suivre", "seguir", "rejoindre", "unirse", "segui", "फ़ॉलो करें", "जुड़ें")
+    private val FB_DISMISS = Regex("(?i)^(hide( post)?|remove|dismiss|close( post)?|✕|×|x|हटाएँ|छुपाएँ|masquer|ocultar|ausblenden|nascondi)$")
+
+    /**
+     * Facebook puts a ✕ / Hide button on sponsored and suggested posts. Finds the one belonging to a
+     * post that says Sponsored or offers Follow / Join, so tapping it makes Facebook remove the post.
+     */
+    private fun facebookDismiss(root: AccessibilityNodeInfo, screen: Rect, prefs: Prefs): AccessibilityNodeInfo? {
+        var found: AccessibilityNodeInfo? = null
+        walk(root, 1500) { n ->
+            if (found != null || !n.isVisibleToUser) return@walk
+            val l = label(n)
+            val ad = prefs.webHideAds && FeedLabels.isAd(l)
+            val sug = prefs.webHideSuggested && l.lowercase() in FB_TRIGGERS_SUGGESTED
+            if (!ad && !sug) return@walk
+            val lb = bounds(n)
+            var p = n.parent
+            var hops = 0
+            while (p != null && hops < 12) {
+                val pb = bounds(p)
+                if (pb.width() >= screen.width() * 0.8 && pb.height() >= lb.height() * 3 && pb.height() <= screen.height()) {
+                    findAll(p, 300) { c -> c.isVisibleToUser && FB_DISMISS.matches(label(c)) }.firstOrNull()?.let {
+                        found = it
+                    }
+                    break
+                }
+                p = p.parent
+                hops++
+            }
+        }
+        return found
     }
 
     private fun snapchat(root: AccessibilityNodeInfo, prefs: Prefs, screen: Rect): Analysis {
@@ -303,6 +390,11 @@ object Rules {
         val hides = ArrayList<Hide>()
         var spotlight = false
         val bottomZone = screen.top + screen.height() * 0.8
+        val snap = "com.snapchat.android"
+        if (anyVisibleId(root, snap, listOf("spotlight_container"))) spotlight = true
+        if (blocking && prefs.hideTab(Platform.SNAPCHAT)) {
+            visible(root, snap, "ngs_spotlight_icon_container").firstOrNull()?.let { hides += Hide(bounds(it)) }
+        }
         walk(root, 1200) { n ->
             if (!n.isVisibleToUser) return@walk
             if (!SNAP_SPOTLIGHT.matches(label(n))) return@walk
@@ -387,6 +479,18 @@ object Rules {
         if (n.isClickable) return n
         val p = n.parent ?: return n
         return if (p.isClickable && bounds(p).height() < bounds(n).height() * 3) p else n
+    }
+
+    /** The first visible element on screen whose label passes [match]. */
+    fun findLabel(root: AccessibilityNodeInfo, match: (String) -> Boolean): AccessibilityNodeInfo? {
+        var found: AccessibilityNodeInfo? = null
+        walk(root, 1200) { n ->
+            if (found == null && n.isVisibleToUser) {
+                val l = label(n)
+                if (l.isNotEmpty() && match(l)) found = n
+            }
+        }
+        return found
     }
 
     /** Breadth-first walk over the window, capped so it stays fast. */

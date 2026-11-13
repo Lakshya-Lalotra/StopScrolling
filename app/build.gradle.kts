@@ -11,8 +11,8 @@ android {
         applicationId = "com.scrollstop.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 8
-        versionName = "4.0"
+        versionCode = 9
+        versionName = "4.1"
     }
 
     // Every build (your PC, GitHub Actions, Android Studio) is signed with the same key,

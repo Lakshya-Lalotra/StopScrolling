@@ -197,7 +197,9 @@ class MainActivity : AppCompatActivity() {
             tvTime.text = Fmt.duration(total)
             val inside = WebSite.entries.map { it.pkg }.distinct().sumOf { stats.get(Stats.webMs(it)) }
             val pct = if (total > 0) (inside * 100 / total) else 0
+            val removed = stats.get(Stats.FEED_REMOVED)
             tvLine.text = "${stats.get(Stats.BLOCKS)} blocked · " +
+                (if (removed > 0) "$removed ads & suggested removed · " else "") +
                 "${Platform.entries.sumOf { stats.get(Stats.shortCount(it)) }} short videos · $pct% locked in"
         }
 
@@ -316,7 +318,7 @@ class MainActivity : AppCompatActivity() {
         if (!prefs.blocked(p)) return "Allowed"
         val a = prefs.allowance(p)
         val parts = mutableListOf(p.feed)
-        if (p == Platform.INSTAGRAM) {
+        if (p == Platform.INSTAGRAM || p == Platform.FACEBOOK) {
             if (prefs.webHideSuggested) parts += "suggested"
             if (prefs.webHideAds) parts += "ads"
         }
@@ -335,7 +337,10 @@ class MainActivity : AppCompatActivity() {
                         { prefs.webHideSuggested }, { prefs.webHideSuggested = it; sheet.refresh() })
                     toggle(box, "Block ads", "Sponsored posts and paid partnerships",
                         { prefs.webHideAds }, { prefs.webHideAds = it; sheet.refresh() })
-                    toggle(box, "Skip past them", "Scrolls on by itself when you reach one",
+                    toggle(box, "Let Instagram remove them", "Taps ⋯ → Not interested / Hide ad for you",
+                        { prefs.igRemovePosts }, { prefs.igRemovePosts = it },
+                        enabled = prefs.webHideSuggested || prefs.webHideAds)
+                    toggle(box, "Skip past the rest", "Covers and scrolls past any it can't remove",
                         { prefs.igSkipHidden }, { prefs.igSkipHidden = it },
                         enabled = prefs.webHideSuggested || prefs.webHideAds)
                     toggle(box, "Block Explore", null, { prefs.blockIgExplore }, { prefs.blockIgExplore = it })
@@ -345,8 +350,12 @@ class MainActivity : AppCompatActivity() {
                 }
                 Platform.YOUTUBE -> toggle(box, "Search-only mode", "Hides the Home feed",
                     { prefs.blockYtHome }, { prefs.blockYtHome = it })
-                Platform.FACEBOOK -> toggle(box, "Block the Video tab", null,
-                    { prefs.blockFbWatch }, { prefs.blockFbWatch = it })
+                Platform.FACEBOOK -> {
+                    toggle(box, "Block the Video tab", null, { prefs.blockFbWatch }, { prefs.blockFbWatch = it })
+                    toggle(box, "Hide suggested posts", "Taps the post's own ✕ / Hide",
+                        { prefs.webHideSuggested }, { prefs.webHideSuggested = it })
+                    toggle(box, "Hide ads", "Taps the post's own ✕ / Hide", { prefs.webHideAds }, { prefs.webHideAds = it })
+                }
                 Platform.SNAPCHAT -> Unit
             }
 

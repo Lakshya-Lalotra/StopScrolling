@@ -171,6 +171,7 @@ class RulesTest {
         val headerKids = mutableListOf(node(ig, id = "row_feed_photo_profile_name", text = name, bounds = Rect(140, y + 10, 600, y + 50)))
         label?.let { headerKids += node(ig, id = "secondary_label", text = it, bounds = Rect(140, y + 50, 600, y + 80)) }
         if (follow) headerKids += node(ig, text = "Follow", bounds = Rect(620, y + 20, 760, y + 70)).also { it.isClickable = true }
+        headerKids += node(ig, desc = "More options", bounds = Rect(980, y + 20, 1060, y + 80)).also { it.isClickable = true }
         return listOf(
             node(ig, id = "row_feed_profile_header", bounds = Rect(0, y, 1080, y + 100), children = headerKids.toTypedArray()),
             node(ig, id = "row_feed_media", bounds = Rect(0, y + 100, 1080, y + 1180)),
@@ -197,7 +198,7 @@ class RulesTest {
         val a = Rules.analyze(Platform.INSTAGRAM, ig, feedScreen(rows), prefs, screen)
         val cover = a.hides.single { it.scrolls }
         assertEquals(Rect(0, 1500, 1080, 2250), cover.rect)
-        assertEquals("Ad hidden", cover.text)
+        assertNull(cover.text) // covers carry no text
         assertEquals(Rect(0, 1500, 1080, 1600), cover.sample) // colour comes from the ad's header row
         assertEquals(Rect(0, 200, 1080, 2250), a.feedList)
 
@@ -205,14 +206,61 @@ class RulesTest {
         val b = Rules.analyze(Platform.INSTAGRAM, ig, feedScreen(igPost(200, "stranger", follow = true) + igPost(1500, "bob")),
             prefs, screen)
         val s = b.hides.single { it.scrolls }
-        assertEquals("Suggested post hidden", s.text)
         assertEquals(Rect(0, 200, 1080, 1500), s.rect)
         assertEquals(1300, b.feedSkip) // it's at the top and fills the screen: skip to bob
+
+        // Instagram's newer "Ad" label, and an ad found only by its "Order now" button bar.
+        val c = Rules.analyze(Platform.INSTAGRAM, ig, feedScreen(igPost(200, "alice") + igPost(1500, "otrivin", label = "Ad")),
+            prefs, screen)
+        assertEquals(Rect(0, 1500, 1080, 2250), c.hides.single { it.scrolls }.rect)
+        val withButton = igPost(1500, "shop") + node(ig, text = "Order now", bounds = Rect(0, 2100, 1080, 2200))
+            .also { it.isClickable = true }
+        val d = Rules.analyze(Platform.INSTAGRAM, ig, feedScreen(igPost(200, "alice") + withButton), prefs, screen)
+        assertEquals(1, d.hides.count { it.scrolls })
+
+        // Instagram can be asked to remove it: the ad's ⋯ button is handed over.
+        val target = c.feedTargets.single()
+        assertEquals(FeedKind.AD, target.kind)
+        assertEquals("otrivin", target.account)
+        assertEquals("More options", target.more.contentDescription.toString())
 
         // Switched off: nothing is covered.
         prefs.webHideAds = false
         prefs.webHideSuggested = false
         assertTrue(Rules.analyze(Platform.INSTAGRAM, ig, feedScreen(rows), prefs, screen).hides.none { it.scrolls })
+    }
+
+    @Test fun postsInsideAWrapperAreCoveredOneByOne() {
+        // Some Instagram versions put every post inside one wrapper that fills the list.
+        val posts = igPost(200, "alice") + igPost(1500, "stranger", follow = true)
+        val wrapper = node(ig, bounds = Rect(0, 200, 1080, 2800), children = posts.toTypedArray())
+        val a = Rules.analyze(Platform.INSTAGRAM, ig, feedScreen(listOf(wrapper)), prefs, screen)
+        val cover = a.hides.single { it.scrolls }
+        assertEquals(1500, cover.rect.top) // only the stranger's post, not the whole screen
+    }
+
+    @Test fun reelFromDmKnowsItsAuthor() {
+        val viewer = node(ig, id = "clips_viewer_view_pager", bounds = screen)
+        val reply = node(ig, id = "reel_viewer_message_composer", bounds = Rect(0, 2200, 1080, 2300))
+        val author = node(ig, id = "clips_author_username", text = "bestfriend", bounds = Rect(40, 1900, 500, 1950))
+        val a = Rules.analyze(Platform.INSTAGRAM, ig, node(ig, bounds = screen, children = arrayOf(viewer, reply, author)),
+            prefs, screen)
+        assertTrue(a.shortVideo)
+        assertTrue(a.reelFromDm)
+        assertEquals("bestfriend", a.reelAuthor)
+    }
+
+    @Test fun facebookHideButtonOnSponsoredPost() {
+        val fb = "com.facebook.katana"
+        val label = node(fb, text = "Sponsored", bounds = Rect(140, 450, 400, 490))
+        val close = node(fb, desc = "Hide post", bounds = Rect(980, 420, 1060, 500)).also { it.isClickable = true }
+        val post = node(fb, bounds = Rect(0, 400, 1080, 1400), children = arrayOf(label, close))
+        val a = Rules.analyze(Platform.FACEBOOK, fb, node(fb, bounds = screen, children = arrayOf(post)), prefs, screen)
+        assertEquals("Hide post", a.dismissButton?.contentDescription?.toString())
+        prefs.webHideAds = false
+        prefs.webHideSuggested = false
+        assertNull(Rules.analyze(Platform.FACEBOOK, fb, node(fb, bounds = screen, children = arrayOf(post)), prefs, screen)
+            .dismissButton)
     }
 
     @Test fun instagramFeedLeftAloneOnOtherTabs() {

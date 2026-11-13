@@ -22,6 +22,17 @@ class FeedPlanTest {
         assertTrue(FeedLabels.isAd("Sponsored"))
         assertTrue(FeedLabels.isAd(" प्रायोजित "))
         assertTrue(FeedLabels.isAd("Paid partnership with brandco"))
+        assertTrue(FeedLabels.isAd("Ad"))           // Instagram's newer label
+        assertFalse(FeedLabels.isAd("Adidas"))
+        assertTrue(FeedLabels.isAdButton("Order now"))
+        assertTrue(FeedLabels.isRemoveOption("Not interested", FeedKind.SUGGESTED))
+        assertTrue(FeedLabels.isRemoveOption("Hide ad", FeedKind.AD))
+        assertFalse(FeedLabels.isRemoveOption("Hide ad", FeedKind.SUGGESTED))
+        assertFalse(FeedLabels.isRemoveOption("Unfollow", FeedKind.SUGGESTED)) // never touches anything else
+        assertFalse(FeedLabels.isRemoveOption("Report", FeedKind.AD))
+        assertTrue(FeedLabels.isAdReason("It's irrelevant"))
+        assertTrue(FeedLabels.isMenuHint("About this account"))
+        assertFalse(FeedLabels.isAdButton("Follow"))
         assertFalse(FeedLabels.isAd("Sponsored by my mum, lol"))
         assertTrue(FeedLabels.isSuggested("Suggested for you"))
         assertTrue(FeedLabels.isSuggested("Because you liked a post from carol"))

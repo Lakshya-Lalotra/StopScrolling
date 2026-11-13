@@ -2,6 +2,15 @@
 
 Each version is published under [Releases](../../releases) with its APK.
 
+## 4.1
+- **Instagram removes ads and suggested posts itself.** When one appears in the Instagram app, ScrollStop opens its ⋯ menu and taps "Not interested" or "Hide ad", the way you would, behind a plain screen so you don't see the menu. At most 8 a minute.
+- **Facebook:** sponsored and suggested posts are removed by tapping the post's own ✕ / Hide button.
+- A reel a friend sends you in DMs stays allowed until you swipe to someone else's reel.
+- More Reels / Shorts / Spotlight screens are recognised.
+- Ads labelled just "Ad" (Instagram's newer label) are now caught, and so are posts with an "Order now" / "Shop now" style button bar.
+- Fixed the whole feed being covered on Instagram versions that wrap all posts in one container: only the ad or suggested post is hidden.
+- Hidden posts are covered without any text, and ScrollStop scrolls past them sooner. If Android hasn't granted the swipe permission yet, it uses Instagram's own scrolling instead.
+
 ## 4.0
 - Simpler screens: Home, Apps (one row per app, tap it for its switches), Stats and Settings.
 - Suggested posts and ads are covered inside the Instagram app's own feed, and ScrollStop scrolls past them.

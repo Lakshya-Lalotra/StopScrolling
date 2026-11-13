@@ -238,6 +238,43 @@ class ColorSampler(private val svc: AccessibilityService, private val onSampled:
     }
 }
 
+/**
+ * A plain screen in the app's own colour, shown for a moment while ScrollStop uses Instagram's ⋯ menu
+ * to remove a post, so the menu flashing up isn't seen. Taps are swallowed while it's up.
+ */
+class Curtain(private val svc: AccessibilityService) {
+    private val wm = svc.getSystemService(WindowManager::class.java)
+    private val handler = Handler(Looper.getMainLooper())
+    private var view: View? = null
+    private val safety = Runnable { hide() }
+
+    val isShowing get() = view != null
+
+    @SuppressLint("ClickableViewAccessibility")
+    fun show(color: Int) {
+        if (view != null) return
+        val v = View(svc).apply {
+            setBackgroundColor(color)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            setOnTouchListener { _, _ -> true }
+        }
+        val lp = overlayParams().apply {
+            width = WindowManager.LayoutParams.MATCH_PARENT
+            height = WindowManager.LayoutParams.MATCH_PARENT
+        }
+        if (runCatching { wm.addView(v, lp) }.isSuccess) {
+            view = v
+            handler.postDelayed(safety, 3_500)
+        }
+    }
+
+    fun hide() {
+        handler.removeCallbacks(safety)
+        view?.let { runCatching { wm.removeViewImmediate(it) } }
+        view = null
+    }
+}
+
 /** Full-screen reminder shown after something was blocked. */
 class BlockScreen(private val svc: AccessibilityService) {
     private val wm = svc.getSystemService(WindowManager::class.java)

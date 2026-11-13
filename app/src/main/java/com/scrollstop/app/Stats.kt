@@ -23,6 +23,8 @@ class Stats private constructor(context: Context) {
 
         const val ALL = "all"
         const val BLOCKS = "blocks"
+        /** Ads and suggested posts removed from a feed (by the app itself, at ScrollStop's request). */
+        const val FEED_REMOVED = "feed_removed"
         fun blocks(key: String) = "blocks:$key"
         fun shortMs(p: Platform) = "sv_ms:${p.key}"
         fun shortCount(p: Platform) = "sv_n:${p.key}"

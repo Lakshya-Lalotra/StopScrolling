@@ -54,6 +54,7 @@ class BlockerService : AccessibilityService() {
     private lateinit var hides: HideOverlays
     private lateinit var sampler: ColorSampler
     private lateinit var blockScreen: BlockScreen
+    private lateinit var curtain: Curtain
     private lateinit var power: PowerManager
     private val h = Handler(Looper.getMainLooper())
 
@@ -93,6 +94,16 @@ class BlockerService : AccessibilityService() {
     private var lastFeedScrollAt = 0L
     private var lastSkipAt = 0L
     private var captureSeconds = 0
+
+    /** Removing a post through Instagram's ⋯ menu: 0 = waiting for the menu, 1 = ad reason, 2 = done. */
+    private class Removal(val kind: FeedKind, val startedAt: Long) {
+        var step = 0
+        var stepAt = startedAt
+    }
+    private var removal: Removal? = null
+    private val removalTimes = ArrayDeque<Long>()
+    private val handled = HashMap<String, Long>()
+    private var dmAuthor: String? = null
     private var sleepRemindedDay = ""
     private val warned = HashSet<String>()
     private var lastToast: Toast? = null
@@ -119,6 +130,7 @@ class BlockerService : AccessibilityService() {
         hides = HideOverlays(this)
         sampler = ColorSampler(this) { scheduleEval() }
         blockScreen = BlockScreen(this)
+        curtain = Curtain(this)
         power = getSystemService(PowerManager::class.java)
         appLabel = applicationInfo.loadLabel(packageManager).toString()
         launchers = findLaunchers()
@@ -148,6 +160,7 @@ class BlockerService : AccessibilityService() {
         h.removeCallbacksAndMessages(null)
         hides.clear()
         blockScreen.dismiss()
+        curtain.hide()
         runCatching { unregisterReceiver(screenReceiver) }
         prefs.sp.unregisterOnSharedPreferenceChangeListener(prefListener)
         stats.flush()
@@ -255,13 +268,25 @@ class BlockerService : AccessibilityService() {
             endWatching()
             return
         }
+        if (platform == Platform.INSTAGRAM && removal != null) {
+            continueRemoval(root)
+            return
+        }
         val a = Rules.analyze(platform, pkg, root, prefs, screen, feed)
         if (platform == Platform.INSTAGRAM && prefs.igUseScrollStop) {
             openScrollStopInstagram(if (a.dmThread) "https://www.instagram.com/direct/inbox/" else null)
             return
         }
+        // Best: ask the app itself to remove the ad / suggested post, like tapping "Not interested" by hand.
+        if (platform == Platform.INSTAGRAM && prefs.igRemovePosts && !blockScreen.isShowing) {
+            a.feedTargets.firstOrNull { canRemove(it.kind, it.account) }?.let {
+                startRemoval(pkg, it)
+                return
+            }
+        }
+        if (platform == Platform.FACEBOOK) a.dismissButton?.let { dismissFacebook(it) }
         hides.show(pkg, if (blockScreen.isShowing || imeVisible()) emptyList() else colorize(pkg, a))
-        if (a.feedSkip != null && a.feedList != null) skipFeedPost(a.feedSkip, a.feedList)
+        if (a.feedSkip != null && a.feedList != null) skipFeedPost(a.feedSkip, a.feedList, a.feedNode)
         if (a.dmThread) lastDmSeenAt = SystemClock.elapsedRealtime()
 
         a.closeNow?.let { what ->
@@ -269,7 +294,7 @@ class BlockerService : AccessibilityService() {
             block("$what blocked", null, platform.key, pkg, GLOBAL_ACTION_BACK)
             return
         }
-        if (a.shortVideo) onShortVideo(platform, pkg) else endWatching()
+        if (a.shortVideo) onShortVideo(platform, pkg, a) else endWatching()
     }
 
     /**
@@ -281,7 +306,7 @@ class BlockerService : AccessibilityService() {
         val missing = ArrayList<Rect>()
         val out = a.hides.map { h ->
             // Tab buttons are measured on themselves, feed covers on their post's header row.
-            val spot = h.sample ?: if (h.text == null) h.rect else null
+            val spot = h.sample ?: if (h.text == null && !h.scrolls) h.rect else null
             if (spot != null) {
                 val c = sampler.tabColor(pkg, spot)
                 when {
@@ -327,10 +352,10 @@ class BlockerService : AccessibilityService() {
      * Scrolls the Instagram feed past a hidden ad or suggested post once you've stopped on it, with a
      * slow drag that comes to rest (so the feed doesn't fling on further).
      */
-    private fun skipFeedPost(by: Int, list: Rect) {
+    private fun skipFeedPost(by: Int, list: Rect, listNode: AccessibilityNodeInfo?) {
         if (!prefs.igSkipHidden) return
         val now = SystemClock.elapsedRealtime()
-        if (now - lastFeedScrollAt < 700 || now - lastSkipAt < 1_500 || feed.direction < 0 || imeVisible()) return
+        if (now - lastFeedScrollAt < 400 || now - lastSkipAt < 1_200 || feed.direction < 0 || imeVisible()) return
         lastSkipAt = now
         val x = list.exactCenterX()
         val startY = list.top + list.height() * 0.85f
@@ -341,7 +366,7 @@ class BlockerService : AccessibilityService() {
         }
         val duration = (300 + (startY - endY) / 4).toLong().coerceAtMost(700)
         val drag = GestureDescription.StrokeDescription(move, 0, duration, true)
-        try {
+        val sent = try {
             dispatchGesture(GestureDescription.Builder().addStroke(drag).build(), object : GestureResultCallback() {
                 override fun onCompleted(gestureDescription: GestureDescription?) {
                     val rest = Path().apply {
@@ -355,13 +380,115 @@ class BlockerService : AccessibilityService() {
                 }
             }, null)
         } catch (e: RuntimeException) {
-            // gestures not allowed (switch the service off and on once after updating)
+            false
         }
+        // No permission to swipe yet (needs the service switched off and on once after updating):
+        // ask the feed itself to scroll a screen down instead.
+        if (!sent) runCatching { listNode?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) }
+    }
+
+    // ---------------- removing posts the way a person would ----------------
+
+    private fun canRemove(kind: FeedKind, account: String): Boolean {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastFeedScrollAt < 350) return false // wait until the feed is still
+        while (removalTimes.isNotEmpty() && now - removalTimes.first() > 60_000) removalTimes.removeFirst()
+        if (removalTimes.size >= 8) return false // at most 8 a minute, like a person
+        handled["$kind|$account"]?.let { if (now - it < 10 * 60_000) return false }
+        return true
+    }
+
+    /** Opens the post's ⋯ menu behind a plain curtain; [continueRemoval] picks the option. */
+    private fun startRemoval(pkg: String, t: FeedTarget) {
+        val now = SystemClock.elapsedRealtime()
+        removalTimes.addLast(now)
+        handled["${t.kind}|${t.account}"] = now
+        removal = Removal(t.kind, now)
+        hides.clear()
+        curtain.show(sampler.colorForWidth(pkg, screenRect().width()) ?: sampler.appColor(pkg)
+            ?: ContextCompat.getColor(this, R.color.hide_bg))
+        if (!click(t.more)) tap(t.more)
+        for (d in listOf(250L, 600L, 1_000L, 1_500L, 2_200L, 3_100L)) {
+            h.postDelayed({ if (removal != null) evaluate() }, d)
+        }
+    }
+
+    private fun continueRemoval(root: AccessibilityNodeInfo) {
+        val r = removal ?: return
+        val now = SystemClock.elapsedRealtime()
+        if (now - r.startedAt > 3_000) {
+            endRemoval(false, root)
+            return
+        }
+        if (r.step == 0) {
+            Rules.findLabel(root) { FeedLabels.isRemoveOption(it, r.kind) }?.let { option ->
+                if (!click(option)) tap(option)
+                r.step = if (r.kind == FeedKind.AD) 1 else 2
+                r.stepAt = now
+            }
+        } else if (r.step == 1) {
+            val reason = Rules.findLabel(root) { FeedLabels.isAdReason(it) }
+            if (reason != null) {
+                if (!click(reason)) tap(reason)
+                r.step = 2
+            } else if (now - r.stepAt > 900) {
+                r.step = 2 // Instagram didn't ask why: the ad is already gone
+            }
+        }
+        if (r.step == 2) endRemoval(true, root)
+    }
+
+    private fun endRemoval(ok: Boolean, root: AccessibilityNodeInfo?) {
+        removal = null
+        // If the menu is still open (the option wasn't found), close it without touching anything else.
+        if (!ok && root != null && Rules.findLabel(root) { FeedLabels.isMenuHint(it) } != null) {
+            performGlobalAction(GLOBAL_ACTION_BACK)
+        }
+        if (ok) stats.add(Stats.FEED_REMOVED, 1)
+        h.postDelayed({
+            curtain.hide()
+            scheduleEval()
+        }, if (ok) 350 else 100)
+    }
+
+    /** Facebook: taps the ✕ / Hide button on a sponsored or suggested post, so Facebook removes it. */
+    private fun dismissFacebook(button: AccessibilityNodeInfo) {
+        val now = SystemClock.elapsedRealtime()
+        if (!canRemove(FeedKind.SUGGESTED, "fb:${Rules.bounds(button).top / 50}")) return
+        removalTimes.addLast(now)
+        if (click(button) || tap(button)) stats.add(Stats.FEED_REMOVED, 1)
+    }
+
+    /** Clicks [n] or the nearest clickable element around it, the way a tap would. */
+    private fun click(n: AccessibilityNodeInfo): Boolean {
+        var c: AccessibilityNodeInfo? = n
+        var hops = 0
+        while (c != null && hops < 6) {
+            if (c.isClickable) return runCatching { c.performAction(AccessibilityNodeInfo.ACTION_CLICK) }.getOrDefault(false)
+            c = c.parent
+            hops++
+        }
+        return false
+    }
+
+    /** A real tap on the middle of [n], for buttons that ignore [click]. */
+    private fun tap(n: AccessibilityNodeInfo): Boolean {
+        val b = Rules.bounds(n)
+        if (b.isEmpty) return false
+        val p = Path().apply { moveTo(b.exactCenterX(), b.exactCenterY()) }
+        return runCatching {
+            dispatchGesture(GestureDescription.Builder()
+                .addStroke(GestureDescription.StrokeDescription(p, 0, 60)).build(), null, null)
+        }.getOrDefault(false)
     }
 
     private fun onAppChanged(pkg: String) {
         fgPkg = pkg
         feed.reset()
+        if (removal != null) {
+            removal = null
+            curtain.hide()
+        }
         hides.clear()
         endWatching()
         if (blockScreen.isShowing && pkg != blockScreen.forPkg && pkg !in launchers &&
@@ -371,12 +498,19 @@ class BlockerService : AccessibilityService() {
 
     // ---------------- short videos ----------------
 
-    private fun onShortVideo(p: Platform, pkg: String) {
+    private fun onShortVideo(p: Platform, pkg: String, a: Analysis) {
         val enforce = prefs.blocked(p)
+        if (watching == p && dmSession && dmAuthor != null && a.reelAuthor != null && a.reelAuthor != dmAuthor) {
+            // Swiped from the friend's reel on to someone else's: that's the Reels feed again.
+            newVideo()
+            return
+        }
         if (watching != p) {
             endWatching()
+            // A reel opened from a DM shows a reply box; it stays allowed until the author changes.
             val fromDm = p == Platform.INSTAGRAM && prefs.allowInstagramDm &&
-                SystemClock.elapsedRealtime() - lastDmSeenAt < 6_000
+                (a.reelFromDm || SystemClock.elapsedRealtime() - lastDmSeenAt < 6_000)
+            dmAuthor = if (fromDm) a.reelAuthor else null
             if (enforce && !fromDm && !hasRoom(p, extraVideo = 1)) {
                 blockFeed(p, pkg)
                 return
@@ -417,6 +551,7 @@ class BlockerService : AccessibilityService() {
     private fun endWatching() {
         watching = null
         dmSession = false
+        dmAuthor = null
         countMode = 0
         pagerMax = -1
         scrollAcc = 0
